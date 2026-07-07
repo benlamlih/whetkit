@@ -46,5 +46,8 @@ release exists.
 | actions/upload-artifact / download-artifact | v4 | 2026-07-07 | training-data knowledge | Same proxy caveat as above. |
 | pypa/gh-action-pypi-publish | release/v1 | 2026-07-07 | PyPA's documented pin (tracking branch) | Officially recommended way to consume this action; handles PyPI Trusted Publishing (OIDC). |
 | gh CLI (release job) | preinstalled on ubuntu-latest | 2026-07-07 | GitHub-hosted runner docs | Used only to create the GitHub Release. |
+| actions/configure-pages | v5 | 2026-07-07 | training-data knowledge | Same proxy caveat as above. `enablement: true` auto-creates the Pages site. |
+| actions/upload-pages-artifact | v3 | 2026-07-07 | training-data knowledge | Same proxy caveat as above. |
+| actions/deploy-pages | v4 | 2026-07-07 | training-data knowledge | Same proxy caveat as above. |
 | uv in CI | latest via https://astral.sh/uv/install.sh | 2026-07-07 | Astral install docs | Install script used instead of the `setup-uv` action to avoid pinning an unverifiable action tag. |
 | ruff-pre-commit | v0.15.20 | 2026-07-07 | mirrors ruff releases on PyPI | Tag mirrors the pinned ruff version. |
