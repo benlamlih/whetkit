@@ -19,7 +19,10 @@ touching your server.
 ## The plan is declarative and reversible
 
 The plan is YAML (default `.whetkit/curation-plan.yaml`) — review it, edit
-it, commit it. Each entry transforms how one origin tool is *presented*:
+it, commit it. After editing, re-score the curated view without regenerating
+the plan: `whetkit run --plan .whetkit/curation-plan.yaml --group curated-v2`
+(called names are translated back to origin names before scoring). Each
+entry transforms how one origin tool is *presented*:
 
 ```yaml
 server: 'stdio: python server.py'
