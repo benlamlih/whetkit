@@ -27,6 +27,14 @@ class TaskScore(BaseModel):
             return False
         return self.tool_hit
 
+    @property
+    def spec_gap(self) -> bool:
+        """Judge passed but the tool match failed: the agent reached a
+        correct outcome via tools the task never listed. Nine times out of
+        ten that means expected_tools is incomplete, not that the agent
+        failed."""
+        return self.judge is not None and self.judge.passed and not self.tool_hit
+
 
 class EvalSummary(BaseModel):
     scores: list[TaskScore]

@@ -199,6 +199,33 @@ class TestAggregate:
         assert stable.flaky_tasks() == []
         assert any("Hit-rate: 100%" in line for line in stable.summary_lines())
 
+    async def test_spec_gap_flags_judge_pass_with_tool_miss(self) -> None:
+        provider = FakeProvider(
+            [
+                LLMTurn(text='{"passed": true, "rationale": "answer is correct"}'),
+                LLMTurn(text='{"passed": true, "rationale": "answer is correct"}'),
+            ]
+        )
+        tasks = [task(["expected_tool"])]
+        runs = [make_run(["unlisted_tool"])]
+        summary = await score_runs(
+            tasks, runs, judge_config=JUDGE, judge_provider=provider, use_judge=True
+        )
+        (score,) = summary.scores
+        assert score.spec_gap is True
+        assert score.hit is False  # still a miss until the spec is fixed
+
+        # a plain miss (judge also failed) is NOT a spec gap
+        provider2 = FakeProvider([LLMTurn(text='{"passed": false, "rationale": "wrong"}')])
+        summary2 = await score_runs(
+            tasks,
+            [make_run(["unlisted_tool"], final_text="nope")],
+            judge_config=JUDGE,
+            judge_provider=provider2,
+            use_judge=True,
+        )
+        assert summary2.scores[0].spec_gap is False
+
     async def test_judge_failure_blocks_hit(self) -> None:
         tasks = [task(["a"])]
         runs = [make_run(["a"])]
