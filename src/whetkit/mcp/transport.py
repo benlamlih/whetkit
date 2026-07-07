@@ -16,10 +16,11 @@ Three connection modes are supported, because real-world servers are mixed:
 """
 
 import json
+import os
 import shutil
 import sys
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
@@ -121,17 +122,25 @@ def _spec_from_json(path: Path) -> ServerSpec:
 
 @asynccontextmanager
 async def open_session(spec: ServerSpec) -> AsyncIterator[ClientSession]:
-    """Open one initialized MCP session over the spec's transport."""
+    """Open one initialized MCP session over the spec's transport.
+
+    Stdio servers' stderr (SDK request logs, npm install chatter) is
+    discarded so it can't garble whetkit's output; set ``WHETKIT_SERVER_LOGS=1``
+    to pass it through when debugging a server that won't start."""
     if isinstance(spec, StdioSpec):
         params = StdioServerParameters(
             command=spec.command, args=spec.args, env=spec.env, cwd=spec.cwd
         )
-        async with (
-            stdio_client(params) as (read, write),
-            ClientSession(read, write) as session,
-        ):
-            await session.initialize()
-            yield session
+        with ExitStack() as stack:
+            errlog = sys.stderr
+            if not os.environ.get("WHETKIT_SERVER_LOGS"):
+                errlog = stack.enter_context(open(os.devnull, "w"))
+            async with (
+                stdio_client(params, errlog=errlog) as (read, write),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                yield session
     else:
         http_client = (
             httpx.AsyncClient(headers=spec.headers, follow_redirects=True, timeout=30)
