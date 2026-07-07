@@ -63,6 +63,14 @@ def test_inspect_prints_inventory() -> None:
 def test_inspect_rejects_bad_server() -> None:
     result = runner.invoke(app, ["inspect", "--server", "does-not-exist"])
     assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "not a URL, directory" in result.output
+
+
+def test_doctor_rejects_bad_server_without_traceback() -> None:
+    result = runner.invoke(app, ["doctor", "--server", "typo.json"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
 
 
 def test_report_requires_existing_traces(tmp_path: Path) -> None:
