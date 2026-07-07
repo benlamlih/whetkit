@@ -169,6 +169,42 @@ def doctor(
 
 
 @app.command()
+def generate(
+    server: Annotated[
+        str,
+        typer.Option("--server", help="MCP server: URL, directory, server.json, or server.py"),
+    ],
+    out: Annotated[
+        str, typer.Option("--out", help="Where to write the drafted task YAML")
+    ] = "tasks/generated.yaml",
+    count: Annotated[int, typer.Option("--count", help="How many tasks to draft")] = 5,
+    model: Annotated[
+        str, typer.Option("--model", help="Generator model as provider:model_id")
+    ] = "anthropic:claude-sonnet-5",
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Draft eval tasks from the server's tool inventory (review before
+    trusting — the header in the output file says the same)."""
+    from whetkit.generate import GeneratorConfig, generate_tasks, write_tasks_yaml
+
+    spec = resolve_server_spec(server, http_mode=http_mode)
+    inventory = asyncio.run(inspect_server(spec))
+    tasks, warnings = asyncio.run(
+        generate_tasks(inventory, server, count=count, config=GeneratorConfig(model=model))
+    )
+    for warning in warnings:
+        typer.echo(f"warning: {warning}", err=True)
+    if not tasks:
+        typer.echo("no valid tasks were drafted — try again or write them by hand", err=True)
+        raise typer.Exit(code=1)
+
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    write_tasks_yaml(tasks, out)
+    typer.echo(f"drafted {len(tasks)} task(s) to {out} — review them, then:")
+    typer.echo(f"  whetkit run --server {server} --tasks {out}")
+
+
+@app.command()
 def run(
     tasks: Annotated[
         str, typer.Option("--tasks", help="Task YAML file or directory of task files")
