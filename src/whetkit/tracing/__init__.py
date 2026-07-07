@@ -1,7 +1,7 @@
 """Reasoning-path traces: structured records of every eval run."""
 
-from mcp_eval.tracing.records import TaskRun, ToolCallRecord, TurnRecord
-from mcp_eval.tracing.store import (
+from whetkit.tracing.records import TaskRun, ToolCallRecord, TurnRecord
+from whetkit.tracing.store import (
     SCHEMA_VERSION,
     TraceStore,
     default_store_path,

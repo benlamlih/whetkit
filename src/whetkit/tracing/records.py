@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from mcp_eval.llm.base import Usage
+from whetkit.llm.base import Usage
 
 
 def utc_now() -> datetime:

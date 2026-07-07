@@ -17,7 +17,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from mcp_eval.datasets import TaskSpec
+from whetkit.datasets import TaskSpec
 
 
 class MatchMode(StrEnum):

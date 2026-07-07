@@ -3,14 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import LLMTurn, ToolCall, Usage, get_provider, parse_model
-from mcp_eval.llm.anthropic_provider import _to_anthropic_messages
-from mcp_eval.llm.base import ChatMessage, ToolResult
-from mcp_eval.llm.openai_provider import _to_openai_messages
-from mcp_eval.mcp import StdioSpec
-from mcp_eval.runner import RunConfig, run_task
-from mcp_eval.tracing.records import RunStatus
+from whetkit.datasets import TaskSpec
+from whetkit.llm import LLMTurn, ToolCall, Usage, get_provider, parse_model
+from whetkit.llm.anthropic_provider import _to_anthropic_messages
+from whetkit.llm.base import ChatMessage, ToolResult
+from whetkit.llm.openai_provider import _to_openai_messages
+from whetkit.mcp import StdioSpec
+from whetkit.runner import RunConfig, run_task
+from whetkit.tracing.records import RunStatus
 
 from .fakes import FakeProvider
 

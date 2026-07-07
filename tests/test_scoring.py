@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import LLMTurn
-from mcp_eval.scoring import (
+from whetkit.datasets import TaskSpec
+from whetkit.llm import LLMTurn
+from whetkit.scoring import (
     JudgeCache,
     JudgeConfig,
     MatchMode,
@@ -12,8 +12,8 @@ from mcp_eval.scoring import (
     score_runs,
     score_tool_match,
 )
-from mcp_eval.tracing import TaskRun, ToolCallRecord, TurnRecord
-from mcp_eval.tracing.records import RunStatus
+from whetkit.tracing import TaskRun, ToolCallRecord, TurnRecord
+from whetkit.tracing.records import RunStatus
 
 from .fakes import FakeProvider
 

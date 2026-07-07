@@ -2,12 +2,12 @@
 
 from pydantic import BaseModel
 
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import LLMProvider
-from mcp_eval.scoring.deterministic import MatchMode, ToolMatchResult, score_tool_match
-from mcp_eval.scoring.judge import JudgeCache, JudgeConfig, JudgeVerdict, judge_run
-from mcp_eval.tracing import TaskRun
-from mcp_eval.tracing.records import RunStatus
+from whetkit.datasets import TaskSpec
+from whetkit.llm import LLMProvider
+from whetkit.scoring.deterministic import MatchMode, ToolMatchResult, score_tool_match
+from whetkit.scoring.judge import JudgeCache, JudgeConfig, JudgeVerdict, judge_run
+from whetkit.tracing import TaskRun
+from whetkit.tracing.records import RunStatus
 
 
 class TaskScore(BaseModel):

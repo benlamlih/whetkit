@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.curation import (
+from whetkit.curation import (
     CuratedMCPClient,
     CurationPlan,
     ToolOverride,
@@ -11,15 +11,15 @@ from mcp_eval.curation import (
     propose_plan,
     save_plan,
 )
-from mcp_eval.curation.optimizer import OptimizerConfig
-from mcp_eval.curation.overlay import UnknownCuratedTool
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import LLMTurn
-from mcp_eval.mcp import StdioSpec, inspect_server, resolve_server_spec
-from mcp_eval.scoring import score_tool_match
-from mcp_eval.scoring.aggregate import TaskScore
-from mcp_eval.tracing import TaskRun
-from mcp_eval.tracing.records import RunStatus
+from whetkit.curation.optimizer import OptimizerConfig
+from whetkit.curation.overlay import UnknownCuratedTool
+from whetkit.datasets import TaskSpec
+from whetkit.llm import LLMTurn
+from whetkit.mcp import StdioSpec, inspect_server, resolve_server_spec
+from whetkit.scoring import score_tool_match
+from whetkit.scoring.aggregate import TaskScore
+from whetkit.tracing import TaskRun
+from whetkit.tracing.records import RunStatus
 
 from .fakes import FakeProvider
 
@@ -104,7 +104,7 @@ class TestCuratedClient:
 
     async def test_overlay_stdio_proxy_end_to_end(self, tmp_path: Path) -> None:
         """The overlay must also work as a real MCP server over stdio."""
-        from mcp_eval.mcp import MCPClient
+        from whetkit.mcp import MCPClient
 
         plan_file = tmp_path / "plan.yaml"
         save_plan(sample_plan(), plan_file)
@@ -112,7 +112,7 @@ class TestCuratedClient:
             command=sys.executable,
             args=[
                 "-m",
-                "mcp_eval.cli",
+                "whetkit.cli",
                 "overlay",
                 "--server",
                 str(SAMPLE_SERVER),

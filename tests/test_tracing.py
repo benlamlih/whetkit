@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.llm import Usage
-from mcp_eval.tracing import TaskRun, ToolCallRecord, TraceStore, TurnRecord, read_jsonl
-from mcp_eval.tracing import write_jsonl as write_jsonl_file
-from mcp_eval.tracing.records import RunStatus, utc_now
+from whetkit.llm import Usage
+from whetkit.tracing import TaskRun, ToolCallRecord, TraceStore, TurnRecord, read_jsonl
+from whetkit.tracing import write_jsonl as write_jsonl_file
+from whetkit.tracing.records import RunStatus, utc_now
 
 
 def make_run(task_id: str = "t1", status: RunStatus = RunStatus.COMPLETED) -> TaskRun:

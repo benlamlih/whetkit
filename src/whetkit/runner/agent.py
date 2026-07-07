@@ -14,11 +14,11 @@ from collections.abc import Callable
 import mcp.types as types
 from pydantic import BaseModel
 
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import ChatMessage, LLMProvider, ToolDef, ToolResult, get_provider, parse_model
-from mcp_eval.mcp import MCPClient, ServerSpec
-from mcp_eval.tracing import TaskRun, ToolCallRecord, TurnRecord
-from mcp_eval.tracing.records import RunStatus, utc_now
+from whetkit.datasets import TaskSpec
+from whetkit.llm import ChatMessage, LLMProvider, ToolDef, ToolResult, get_provider, parse_model
+from whetkit.mcp import MCPClient, ServerSpec
+from whetkit.tracing import TaskRun, ToolCallRecord, TurnRecord
+from whetkit.tracing.records import RunStatus, utc_now
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a capable assistant with access to tools from an MCP server. "

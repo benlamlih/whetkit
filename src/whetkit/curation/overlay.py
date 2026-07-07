@@ -5,7 +5,7 @@ Two ways to use it:
 
 - :class:`CuratedMCPClient` — in-process overlay used by the eval runner for
   before/after comparisons.
-- :func:`serve_overlay` — a real stdio MCP server (``mcp-eval overlay``) so
+- :func:`serve_overlay` — a real stdio MCP server (``whetkit overlay``) so
   any MCP client (Claude Code, an IDE, another agent) can talk to the
   curated view. The origin server is never modified; stop the proxy and
   nothing remains.
@@ -15,8 +15,8 @@ import mcp.types as types
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
-from mcp_eval.curation.plan import CurationPlan
-from mcp_eval.mcp import MCPClient, ServerSpec
+from whetkit.curation.plan import CurationPlan
+from whetkit.mcp import MCPClient, ServerSpec
 
 
 class UnknownCuratedTool(Exception):
@@ -49,7 +49,7 @@ class CuratedMCPClient(MCPClient):
         return await super().call_tool(mapping[name], arguments)
 
 
-def build_overlay_server(client: CuratedMCPClient, name: str = "mcp-eval-overlay") -> Server:
+def build_overlay_server(client: CuratedMCPClient, name: str = "whetkit-overlay") -> Server:
     server = Server(name)
 
     @server.list_tools()

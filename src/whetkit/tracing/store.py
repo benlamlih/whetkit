@@ -14,7 +14,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from mcp_eval.tracing.records import TaskRun
+from whetkit.tracing.records import TaskRun
 
 SCHEMA_VERSION = 1
 
@@ -71,7 +71,7 @@ class TraceStore:
             elif int(row["value"]) > SCHEMA_VERSION:
                 raise RuntimeError(
                     f"{self.path} uses trace schema v{row['value']}, but this "
-                    f"mcp-eval only understands up to v{SCHEMA_VERSION} — upgrade mcp-eval"
+                    f"whetkit only understands up to v{SCHEMA_VERSION} — upgrade whetkit"
                 )
 
     def save_run(self, run: TaskRun, run_group: str) -> int:
@@ -151,8 +151,8 @@ def read_jsonl(path: str | Path) -> list[TaskRun]:
 
 
 def default_store_path(base_dir: str | Path = ".") -> Path:
-    """Project-local default: ./.mcp-eval/traces.sqlite3 (gitignored)."""
-    return Path(base_dir) / ".mcp-eval" / "traces.sqlite3"
+    """Project-local default: ./.whetkit/traces.sqlite3 (gitignored)."""
+    return Path(base_dir) / ".whetkit" / "traces.sqlite3"
 
 
 def _summary_row(run: TaskRun) -> dict:

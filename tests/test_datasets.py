@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.datasets import TaskSpec, load_tasks
-from mcp_eval.mcp import MCPClient, resolve_server_spec
+from whetkit.datasets import TaskSpec, load_tasks
+from whetkit.mcp import MCPClient, resolve_server_spec
 
 REPO_ROOT = Path(__file__).parent.parent
 EXAMPLES_TASKS = REPO_ROOT / "examples" / "tasks"

@@ -4,8 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from mcp_eval.mcp.client import MCPClient
-from mcp_eval.mcp.transport import ServerSpec
+from whetkit.mcp.client import MCPClient
+from whetkit.mcp.transport import ServerSpec
 
 
 def estimate_tokens(text: str) -> int:

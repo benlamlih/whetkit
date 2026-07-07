@@ -1,8 +1,8 @@
-"""Sample MCP server for the mcp-eval demo: a small e-commerce backend.
+"""Sample MCP server for the whetkit demo: a small e-commerce backend.
 
 This server is INTENTIONALLY badly curated — that is the point. It exposes
 too many tools, with cryptic or misleading names, vague descriptions, and
-duplicated functionality, so that `mcp-eval curate` has something to fix:
+duplicated functionality, so that `whetkit curate` has something to fix:
 
 - ``data_query_1`` / ``legacy_search`` both search products; neither says so.
 - ``data_query_2`` searches orders but is described like a generic query.

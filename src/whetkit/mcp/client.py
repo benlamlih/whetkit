@@ -7,7 +7,7 @@ from typing import Any, Self
 import mcp.types as types
 from mcp import ClientSession
 
-from mcp_eval.mcp.transport import HttpMode, HttpSpec, ServerSpec, open_session
+from whetkit.mcp.transport import HttpMode, HttpSpec, ServerSpec, open_session
 
 
 class MCPClient:

@@ -1,4 +1,4 @@
-"""Command-line entry point for mcp-eval."""
+"""Command-line entry point for whetkit."""
 
 import asyncio
 import os
@@ -6,10 +6,10 @@ from typing import Annotated
 
 import typer
 
-from mcp_eval.mcp import HttpMode, ServerSpec, inspect_server, resolve_server_spec
+from whetkit.mcp import HttpMode, ServerSpec, inspect_server, resolve_server_spec
 
 app = typer.Typer(
-    name="mcp-eval",
+    name="whetkit",
     help="Evaluate and improve LLM agent tool selection on MCP servers.",
     no_args_is_help=True,
 )
@@ -19,7 +19,7 @@ def _judge_enabled(judge: str, judge_model: str) -> bool:
     """--judge auto: grade with the LLM judge only when its API key is set."""
     if judge in ("on", "off"):
         return judge == "on"
-    from mcp_eval.llm import parse_model
+    from whetkit.llm import parse_model
 
     provider_name, _ = parse_model(judge_model)
     key_var = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
@@ -110,7 +110,7 @@ def run(
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
     store: Annotated[
         str | None,
-        typer.Option("--store", help="Trace SQLite path (default ./.mcp-eval/traces.sqlite3)"),
+        typer.Option("--store", help="Trace SQLite path (default ./.whetkit/traces.sqlite3)"),
     ] = None,
     jsonl: Annotated[
         str | None, typer.Option("--jsonl", help="Also write traces to this JSONL file")
@@ -118,10 +118,10 @@ def run(
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Run eval tasks against an MCP server and print scored results."""
-    from mcp_eval.datasets import load_tasks
-    from mcp_eval.runner import RunConfig, run_task
-    from mcp_eval.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
-    from mcp_eval.tracing import TraceStore, default_store_path, write_jsonl
+    from whetkit.datasets import load_tasks
+    from whetkit.runner import RunConfig, run_task
+    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.tracing import TraceStore, default_store_path, write_jsonl
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
@@ -194,7 +194,7 @@ def curate(
     judge_model: Annotated[str, typer.Option("--judge-model")] = "anthropic:claude-sonnet-5",
     plan_path: Annotated[
         str, typer.Option("--plan", help="Where to write the curation plan YAML")
-    ] = ".mcp-eval/curation-plan.yaml",
+    ] = ".whetkit/curation-plan.yaml",
     match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
     store: Annotated[str | None, typer.Option("--store")] = None,
@@ -202,13 +202,13 @@ def curate(
 ) -> None:
     """Baseline-eval the server, propose a curation overlay, re-eval through
     it, and show the before/after hit-rate."""
-    from mcp_eval.curation import CuratedMCPClient, propose_plan, save_plan
-    from mcp_eval.curation.optimizer import OptimizerConfig
-    from mcp_eval.datasets import load_tasks
-    from mcp_eval.mcp import inspect_server
-    from mcp_eval.runner import RunConfig, run_task
-    from mcp_eval.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
-    from mcp_eval.tracing import TraceStore, default_store_path
+    from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
+    from whetkit.curation.optimizer import OptimizerConfig
+    from whetkit.datasets import load_tasks
+    from whetkit.mcp import inspect_server
+    from whetkit.runner import RunConfig, run_task
+    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.tracing import TraceStore, default_store_path
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
@@ -307,7 +307,7 @@ def overlay(
 ) -> None:
     """Serve the curated view of a server as a stdio MCP server (reversible:
     the origin is never modified)."""
-    from mcp_eval.curation import load_plan, serve_overlay
+    from whetkit.curation import load_plan, serve_overlay
 
     origin = resolve_server_spec(server, http_mode=http_mode)
     asyncio.run(serve_overlay(origin, load_plan(plan)))

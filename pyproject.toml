@@ -1,5 +1,5 @@
 [project]
-name = "mcp-eval"
+name = "whetkit"
 version = "0.1.0"
 description = "Measure and improve how well LLM agents select and use the tools exposed by an MCP server"
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-eval = "mcp_eval.cli:app"
+whetkit = "whetkit.cli:app"
 
 [dependency-groups]
 dev = [

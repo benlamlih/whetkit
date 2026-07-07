@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_eval.mcp import (
+from whetkit.mcp import (
     HttpMode,
     HttpSpec,
     MCPClient,
@@ -14,7 +14,7 @@ from mcp_eval.mcp import (
     inspect_server,
     resolve_server_spec,
 )
-from mcp_eval.mcp.introspect import estimate_tokens, schema_complexity
+from whetkit.mcp.introspect import estimate_tokens, schema_complexity
 
 FIXTURES = Path(__file__).parent / "fixtures"
 MINI_SERVER = FIXTURES / "mini_server.py"

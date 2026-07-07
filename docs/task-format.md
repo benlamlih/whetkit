@@ -1,8 +1,8 @@
 # Task file format
 
-Eval tasks are YAML files validated by `mcp_eval.datasets.TaskSpec`
+Eval tasks are YAML files validated by `whetkit.datasets.TaskSpec`
 (pydantic). A file contains either one task mapping or a list of task
-mappings; `mcp-eval` loads every `*.yaml` / `*.yml` file in the directory you
+mappings; `whetkit` loads every `*.yaml` / `*.yml` file in the directory you
 point it at.
 
 ## Example
@@ -46,4 +46,4 @@ tags: [customers, write, ordered]
 - **Alternatives are for genuine equivalents.** If two tools legitimately
   solve the step, list both. Don't use alternatives to paper over a server
   that has duplicate tools — that duplication is exactly what
-  `mcp-eval curate` is for.
+  `whetkit curate` is for.

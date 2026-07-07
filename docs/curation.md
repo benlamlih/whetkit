@@ -1,6 +1,6 @@
 # Curation and the overlay proxy
 
-`mcp-eval curate` measures how well an agent picks your server's tools, asks
+`whetkit curate` measures how well an agent picks your server's tools, asks
 an LLM to fix the tool set's *metadata*, and measures again — all without
 touching your server.
 
@@ -18,7 +18,7 @@ touching your server.
 
 ## The plan is declarative and reversible
 
-The plan is YAML (default `.mcp-eval/curation-plan.yaml`) — review it, edit
+The plan is YAML (default `.whetkit/curation-plan.yaml`) — review it, edit
 it, commit it. Each entry transforms how one origin tool is *presented*:
 
 ```yaml
@@ -59,7 +59,7 @@ bad LLM proposal can degrade the overlay but never break delegation.
 Serve the curated view as a real stdio MCP server for any MCP client:
 
 ```sh
-uv run mcp-eval overlay --server examples/sample-server --plan .mcp-eval/curation-plan.yaml
+uv run whetkit overlay --server examples/sample-server --plan .whetkit/curation-plan.yaml
 ```
 
 Point Claude Code (or any MCP-capable agent) at that command as a stdio

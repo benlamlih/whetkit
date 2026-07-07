@@ -1,6 +1,6 @@
 """Test doubles shared across the suite."""
 
-from mcp_eval.llm import ChatMessage, LLMProvider, LLMTurn, ToolDef
+from whetkit.llm import ChatMessage, LLMProvider, LLMTurn, ToolDef
 
 
 class FakeProvider(LLMProvider):

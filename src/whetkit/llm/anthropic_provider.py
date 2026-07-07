@@ -8,7 +8,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from mcp_eval.llm.base import ChatMessage, LLMProvider, LLMTurn, ToolCall, ToolDef, Usage
+from whetkit.llm.base import ChatMessage, LLMProvider, LLMTurn, ToolCall, ToolDef, Usage
 
 
 def _to_anthropic_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:

@@ -14,9 +14,9 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import ChatMessage, LLMProvider, get_provider, parse_model
-from mcp_eval.tracing import TaskRun
+from whetkit.datasets import TaskSpec
+from whetkit.llm import ChatMessage, LLMProvider, get_provider, parse_model
+from whetkit.tracing import TaskRun
 
 DEFAULT_JUDGE_MODEL = "anthropic:claude-sonnet-5"
 

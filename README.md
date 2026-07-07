@@ -1,9 +1,9 @@
-# mcp-eval
+# whetkit
 
 **Measure — then improve — how well LLM agents pick and use the tools your MCP
 server exposes.**
 
-`mcp-eval` is a local-first CLI that runs an agent against your
+`whetkit` is a local-first CLI that runs an agent against your
 [MCP](https://modelcontextprotocol.io) server on a set of eval tasks, scores
 tool-selection hit-rate, and then *curates* the tool set (rename / prune /
 merge / rewrite descriptions) via a reversible overlay proxy — showing a
@@ -14,10 +14,10 @@ measurable before/after improvement.
 ## Planned commands
 
 ```sh
-uv run mcp-eval inspect --server examples/sample-server   # tool inventory
-uv run mcp-eval run     --server examples/sample-server --tasks examples/tasks
-uv run mcp-eval curate  --server examples/sample-server --tasks examples/tasks
-uv run mcp-eval report  # before/after hit-rate, HTML + JSON
+uv run whetkit inspect --server examples/sample-server   # tool inventory
+uv run whetkit run     --server examples/sample-server --tasks examples/tasks
+uv run whetkit curate  --server examples/sample-server --tasks examples/tasks
+uv run whetkit report  # before/after hit-rate, HTML + JSON
 ```
 
 ## Development

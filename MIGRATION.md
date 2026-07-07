@@ -16,7 +16,7 @@ breaking changes between pre-releases, so we pin the latest stable v1 line:
    `examples/` and the curation overlay proxy.
 3. Re-check the streamable-HTTP client APIs against the 2026-07-28 stateless
    spec. All transport construction is isolated in
-   `src/mcp_eval/mcp/transport.py` behind the `ServerSpec` → session-factory
+   `src/whetkit/mcp/transport.py` behind the `ServerSpec` → session-factory
    interface, so the swap should not leak outside that module.
 4. Keep support for all three connection modes (stdio, legacy stateful
    streamable-HTTP, stateless streamable-HTTP) — real-world servers will stay

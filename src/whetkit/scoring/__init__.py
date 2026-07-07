@@ -1,8 +1,8 @@
 """Scoring: deterministic tool-selection matching + LLM-as-judge grading."""
 
-from mcp_eval.scoring.aggregate import EvalSummary, TaskScore, score_runs
-from mcp_eval.scoring.deterministic import MatchMode, ToolMatchResult, score_tool_match
-from mcp_eval.scoring.judge import JudgeCache, JudgeConfig, JudgeVerdict, judge_run
+from whetkit.scoring.aggregate import EvalSummary, TaskScore, score_runs
+from whetkit.scoring.deterministic import MatchMode, ToolMatchResult, score_tool_match
+from whetkit.scoring.judge import JudgeCache, JudgeConfig, JudgeVerdict, judge_run
 
 __all__ = [
     "EvalSummary",

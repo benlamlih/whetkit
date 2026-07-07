@@ -1,4 +1,4 @@
 def test_package_imports() -> None:
-    import mcp_eval
+    import whetkit
 
-    assert mcp_eval.__version__
+    assert whetkit.__version__

@@ -13,12 +13,12 @@ import re
 
 from pydantic import BaseModel
 
-from mcp_eval.curation.plan import CurationPlan, ToolOverride
-from mcp_eval.datasets import TaskSpec
-from mcp_eval.llm import ChatMessage, LLMProvider, get_provider, parse_model
-from mcp_eval.mcp.introspect import ServerInventory
-from mcp_eval.scoring import TaskScore
-from mcp_eval.tracing import TaskRun
+from whetkit.curation.plan import CurationPlan, ToolOverride
+from whetkit.datasets import TaskSpec
+from whetkit.llm import ChatMessage, LLMProvider, get_provider, parse_model
+from whetkit.mcp.introspect import ServerInventory
+from whetkit.scoring import TaskScore
+from whetkit.tracing import TaskRun
 
 DEFAULT_OPTIMIZER_MODEL = "anthropic:claude-sonnet-5"
 
