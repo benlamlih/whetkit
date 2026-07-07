@@ -11,6 +11,11 @@ duplicates — via a **reversible overlay proxy** that never modifies your
 server. It re-runs the eval through the overlay and hands you a before/after
 report.
 
+Unlike MCP inspectors and testing frameworks, whetkit **closes the
+optimization loop**: it measures agent behavior, proposes a curated tool
+surface, applies it through a reversible proxy, and re-runs the same evals to
+quantify the improvement.
+
 ```text
 whetkit inspect  ──►  what does the agent actually see?
 whetkit run      ──►  how often does it pick the right tools?   (hit-rate)
