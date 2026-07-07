@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.python-version.local
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+
+# Secrets — never commit keys
+.env
+.env.*
+*.pem
+
+# Local data: traces, judge cache, reports
+*.sqlite3
+*.db
+*.duckdb
+.mcp-eval/
+reports/
+traces/
+*.jsonl

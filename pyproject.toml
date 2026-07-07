@@ -1,0 +1,43 @@
+[project]
+name = "mcp-eval"
+version = "0.1.0"
+description = "Measure and improve how well LLM agents select and use the tools exposed by an MCP server"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Mohammed Benlamlih" }]
+requires-python = ">=3.13"
+dependencies = [
+    "mcp==1.28.1",
+    "anthropic==0.116.0",
+    "openai==2.44.0",
+    "pydantic==2.13.4",
+    "pyyaml==6.0.3",
+    "typer==0.26.8",
+]
+
+[project.scripts]
+mcp-eval = "mcp_eval.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.15.20",
+    "pre-commit==4.6.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
