@@ -332,7 +332,7 @@ def run(
             f"Tokens in/out: {tokens_in}/{tokens_out}   "
             f"Total latency: {sum(r.total_latency_ms for r in runs) / 1000:.1f}s"
         )
-        if not use_judge:
+        if judge == "auto" and not use_judge:
             typer.echo(
                 "(LLM judge skipped: no API key found — set ANTHROPIC_API_KEY or pass --judge on)"
             )
