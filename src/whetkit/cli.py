@@ -16,6 +16,14 @@ app = typer.Typer(
 )
 
 
+def _resolve_server(value: str, http_mode: HttpMode) -> ServerSpec:
+    """resolve_server_spec with a CLI-friendly error instead of a traceback."""
+    try:
+        return resolve_server_spec(value, http_mode=http_mode)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 def _judge_enabled(judge: str, judge_model: str) -> bool:
     """--judge auto: grade with the LLM judge only when its API key is set."""
     if judge in ("on", "off"):
@@ -31,10 +39,10 @@ def _resolve_task_servers(
     tasks: list, server_override: str | None, http_mode: HttpMode
 ) -> dict[str, ServerSpec]:
     if server_override is not None:
-        spec = resolve_server_spec(server_override, http_mode=http_mode)
+        spec = _resolve_server(server_override, http_mode)
         return {task.server: spec for task in tasks}
     return {
-        task.server: resolve_server_spec(task.server, http_mode=http_mode)
+        task.server: _resolve_server(task.server, http_mode)
         for task in {t.server: t for t in tasks}.values()
     }
 
@@ -117,7 +125,7 @@ def inspect(
     ] = HttpMode.STATEFUL,
 ) -> None:
     """Connect to an MCP server and print its tool inventory."""
-    spec = resolve_server_spec(server, http_mode=http_mode)
+    spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
 
     for line in inventory.summary_lines():
@@ -164,7 +172,7 @@ def doctor(
     if fail_on not in ("error", "warn", "never"):
         raise typer.BadParameter("--fail-on must be 'error', 'warn', or 'never'")
 
-    spec = resolve_server_spec(server, http_mode=http_mode)
+    spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
     findings = diagnose(inventory)
 
@@ -215,7 +223,7 @@ def generate(
     trusting — the header in the output file says the same)."""
     from whetkit.generate import GeneratorConfig, generate_tasks, write_tasks_yaml
 
-    spec = resolve_server_spec(server, http_mode=http_mode)
+    spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
     tasks, warnings = asyncio.run(
         generate_tasks(inventory, server, count=count, config=GeneratorConfig(model=model))
@@ -729,7 +737,7 @@ def overlay(
     the origin is never modified)."""
     from whetkit.curation import load_plan, serve_overlay
 
-    origin = resolve_server_spec(server, http_mode=http_mode)
+    origin = _resolve_server(server, http_mode)
     asyncio.run(serve_overlay(origin, load_plan(plan)))
 
 
