@@ -111,6 +111,64 @@ def inspect(
 
 
 @app.command()
+def doctor(
+    server: Annotated[
+        str,
+        typer.Option("--server", help="MCP server: URL, directory, server.json, or server.py"),
+    ],
+    json_out: Annotated[
+        bool, typer.Option("--json", help="Emit findings as JSON instead of text")
+    ] = False,
+    fail_on: Annotated[
+        str,
+        typer.Option(
+            "--fail-on",
+            help="Exit non-zero when findings at this severity exist: 'error', 'warn', or 'never'",
+        ),
+    ] = "never",
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Lint a server's tool surface: vague descriptions, cryptic names,
+    near-duplicates, schema and context-budget problems. No tasks or API
+    key needed."""
+    from whetkit.doctor import Severity, diagnose
+
+    if fail_on not in ("error", "warn", "never"):
+        raise typer.BadParameter("--fail-on must be 'error', 'warn', or 'never'")
+
+    spec = resolve_server_spec(server, http_mode=http_mode)
+    inventory = asyncio.run(inspect_server(spec))
+    findings = diagnose(inventory)
+
+    if json_out:
+        import json as jsonlib
+
+        typer.echo(jsonlib.dumps([f.model_dump() for f in findings], indent=2))
+    else:
+        for line in inventory.summary_lines():
+            typer.echo(line)
+        typer.echo()
+        if not findings:
+            typer.echo("No problems found — this tool surface reads clean.")
+        for finding in findings:
+            typer.echo(f"[{finding.severity.upper():<5}] {finding.check}: {finding.message}")
+        counts = {s: sum(f.severity == s for f in findings) for s in Severity}
+        if findings:
+            typer.echo(
+                f"\n{counts[Severity.ERROR]} error(s), {counts[Severity.WARN]} warning(s), "
+                f"{counts[Severity.INFO]} info — 'whetkit curate' can propose and prove fixes."
+            )
+
+    worst_hit = {
+        "error": any(f.severity == Severity.ERROR for f in findings),
+        "warn": any(f.severity in (Severity.ERROR, Severity.WARN) for f in findings),
+        "never": False,
+    }[fail_on]
+    if worst_hit:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def run(
     tasks: Annotated[
         str, typer.Option("--tasks", help="Task YAML file or directory of task files")
