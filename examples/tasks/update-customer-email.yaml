@@ -1,0 +1,15 @@
+# Ordered write-then-verify: update the email with cust_upd, then confirm by
+# re-fetching the record (two duplicate fetch tools are both acceptable).
+id: update-customer-email
+prompt: >
+  Change customer CUST-7's email address to jonas.weber@newmail.example and
+  then verify the change by fetching the customer record.
+server: ../sample-server
+expected_tools:
+  - cust_upd
+  - [get_rec, fetch_record]
+ordered: true
+success_criteria: >
+  The final answer confirms that customer CUST-7's email is now
+  jonas.weber@newmail.example, based on a fresh read of the record.
+tags: [customers, write, ordered]

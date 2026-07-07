@@ -1,0 +1,15 @@
+# Multi-step write: place an order with the opaque proc_ord tool, then check
+# remaining stock with inv_check.
+id: place-order
+prompt: >
+  Place an order for 2 units of product P-3 for customer CUST-2, then tell me
+  how many units of P-3 remain in stock after the order.
+server: ../sample-server
+expected_tools:
+  - proc_ord
+  - inv_check
+ordered: true
+success_criteria: >
+  The final answer confirms an order was created for 2 units of P-3 for
+  customer CUST-2 and reports the remaining stock as 15 units.
+tags: [orders, write, ordered]

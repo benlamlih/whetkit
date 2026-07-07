@@ -1,0 +1,13 @@
+# Product search: the agent must realize the cryptically-named data_query_1
+# (or the verbose list_* tool / legacy_search) is the product-search tool.
+id: find-product
+prompt: >
+  Find the products matching "wireless mouse" and tell me the name and price
+  of the cheapest one.
+server: ../sample-server
+expected_tools:
+  - [data_query_1, legacy_search, list_all_products_with_optional_filters_and_pagination_v3]
+success_criteria: >
+  The final answer identifies the AeroGlide Wireless Mouse as the cheapest
+  matching product and states its price of $24.99.
+tags: [search, read-only]

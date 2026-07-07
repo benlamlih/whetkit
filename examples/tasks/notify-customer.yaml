@@ -1,0 +1,13 @@
+# Worst-case naming: sending an order confirmation requires do_thing, whose
+# name and description say nothing about notifications.
+id: notify-customer
+prompt: >
+  Send an order confirmation notification to amina@example.com for order
+  ORD-1001.
+server: ../sample-server
+expected_tools:
+  - do_thing
+success_criteria: >
+  The final answer confirms a notification was sent to amina@example.com
+  referencing order ORD-1001.
+tags: [notifications, write]

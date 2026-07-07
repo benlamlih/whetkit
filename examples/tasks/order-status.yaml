@@ -1,0 +1,10 @@
+# Order lookup: the right tool is ord_status_check_tool_v2, but data_query_2
+# ("Query data from the system") looks equally plausible before curation.
+id: order-status
+prompt: What is the current status of order ORD-1002?
+server: ../sample-server
+expected_tools:
+  - [ord_status_check_tool_v2, data_query_2]
+success_criteria: >
+  The final answer states that order ORD-1002 is shipped.
+tags: [orders, read-only]
