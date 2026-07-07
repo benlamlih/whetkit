@@ -1,0 +1,162 @@
+from pathlib import Path
+
+import pytest
+
+from mcp_eval.datasets import TaskSpec
+from mcp_eval.llm import LLMTurn
+from mcp_eval.scoring import (
+    JudgeCache,
+    JudgeConfig,
+    MatchMode,
+    judge_run,
+    score_runs,
+    score_tool_match,
+)
+from mcp_eval.tracing import TaskRun, ToolCallRecord, TurnRecord
+from mcp_eval.tracing.records import RunStatus
+
+from .fakes import FakeProvider
+
+
+def task(expected: list, ordered: bool = False) -> TaskSpec:
+    return TaskSpec(
+        id="t",
+        prompt="p",
+        server="s",
+        expected_tools=expected,
+        ordered=ordered,
+        success_criteria="c",
+    )
+
+
+class TestDeterministicScorer:
+    def test_unordered_hit_with_extras(self) -> None:
+        result = score_tool_match(task(["a", "b"]), ["b", "x", "a"])
+        assert result.matched is True
+        assert result.extra_calls == ["x"]
+        assert result.precision == pytest.approx(2 / 3)
+        assert result.recall == 1.0
+
+    def test_unordered_miss(self) -> None:
+        result = score_tool_match(task(["a", "b"]), ["a", "x"])
+        assert result.matched is False
+        assert result.missing_slots == [["b"]]
+        assert result.recall == 0.5
+
+    def test_alternatives_satisfy_slot(self) -> None:
+        result = score_tool_match(task([["a1", "a2"]]), ["a2"])
+        assert result.matched is True
+        assert result.precision == 1.0
+
+    def test_one_call_cannot_satisfy_two_slots(self) -> None:
+        result = score_tool_match(task(["a", "a"]), ["a"])
+        assert result.matched is False
+        assert result.satisfied_slots == 1
+
+    def test_ordered_requires_subsequence(self) -> None:
+        ordered_task = task(["first", "second"], ordered=True)
+        assert score_tool_match(ordered_task, ["first", "x", "second"]).matched is True
+        assert score_tool_match(ordered_task, ["second", "first"]).matched is False
+
+    def test_exact_mode(self) -> None:
+        exact = MatchMode.EXACT
+        assert score_tool_match(task(["a", "b"]), ["a", "b"], exact).matched is True
+        assert score_tool_match(task(["a", "b"]), ["b", "a"], exact).matched is False
+        assert score_tool_match(task(["a"]), ["a", "a"], exact).matched is False
+        assert score_tool_match(task([["a1", "a2"]]), ["a2"], exact).matched is True
+
+    def test_no_calls(self) -> None:
+        result = score_tool_match(task(["a"]), [])
+        assert result.matched is False
+        assert result.precision == 0.0
+        assert result.recall == 0.0
+
+
+def make_run(tools: list[str], final_text: str | None = "done") -> TaskRun:
+    return TaskRun(
+        task_id="t",
+        server="s",
+        model="m",
+        turns=[
+            TurnRecord(
+                index=0,
+                tool_calls=[
+                    ToolCallRecord(call_id=f"c{i}", name=name, result_text="ok")
+                    for i, name in enumerate(tools)
+                ],
+            )
+        ],
+        final_text=final_text,
+    )
+
+
+JUDGE = JudgeConfig(model="fake:judge")
+
+
+class TestJudge:
+    async def test_verdict_parsed(self) -> None:
+        provider = FakeProvider([LLMTurn(text='{"passed": true, "rationale": "answer states 5"}')])
+        verdict = await judge_run(task(["a"]), make_run(["a"]), JUDGE, provider)
+        assert verdict.passed is True
+        assert verdict.valid is True
+        assert verdict.rationale == "answer states 5"
+        # the judge saw the rubric and the transcript
+        prompt = provider.calls[0]["messages"][0].content
+        assert "<success_criteria>" in prompt
+        assert "a({})" in prompt
+
+    async def test_unparseable_after_retry_fails_closed(self) -> None:
+        provider = FakeProvider([LLMTurn(text="PASS!"), LLMTurn(text="definitely passed")])
+        verdict = await judge_run(task(["a"]), make_run(["a"]), JUDGE, provider)
+        assert verdict.passed is False
+        assert verdict.valid is False
+        assert len(provider.calls) == 2
+
+    async def test_cache_hit_skips_provider(self, tmp_path: Path) -> None:
+        cache = JudgeCache(tmp_path / "judge.sqlite3")
+        provider = FakeProvider([LLMTurn(text='{"passed": false, "rationale": "wrong value"}')])
+        run = make_run(["a"])
+
+        first = await judge_run(task(["a"]), run, JUDGE, provider, cache)
+        second = await judge_run(task(["a"]), run, JUDGE, provider, cache)
+        assert first == second
+        assert len(provider.calls) == 1  # second verdict came from the cache
+
+        different_run = make_run(["a"], final_text="other answer")
+        provider.script.append(LLMTurn(text='{"passed": true, "rationale": "ok"}'))
+        third = await judge_run(task(["a"]), different_run, JUDGE, provider, cache)
+        assert third.passed is True
+        cache.close()
+
+
+class TestAggregate:
+    async def test_score_runs_hit_rate(self) -> None:
+        tasks = [
+            task(["a"]).model_copy(update={"id": "hit"}),
+            task(["b"]).model_copy(update={"id": "miss"}),
+            task(["c"]).model_copy(update={"id": "norun"}),
+        ]
+        runs = [
+            make_run(["a"]).model_copy(update={"task_id": "hit"}),
+            make_run(["x"]).model_copy(update={"task_id": "miss"}),
+        ]
+        summary = await score_runs(tasks, runs)
+        assert summary.task_count == 3
+        assert summary.hit_rate == pytest.approx(1 / 3)
+        assert summary.tool_hit_rate == pytest.approx(1 / 3)
+        assert summary.judge_pass_rate is None
+        by_id = {s.task_id: s for s in summary.scores}
+        assert by_id["norun"].run_status == RunStatus.ERROR
+        assert any("Hit-rate: 33%" in line for line in summary.summary_lines())
+
+    async def test_judge_failure_blocks_hit(self) -> None:
+        tasks = [task(["a"])]
+        runs = [make_run(["a"])]
+        provider = FakeProvider([LLMTurn(text='{"passed": false, "rationale": "bad answer"}')])
+        summary = await score_runs(
+            tasks, runs, judge_config=JUDGE, judge_provider=provider, use_judge=True
+        )
+        (score,) = summary.scores
+        assert score.tool_hit is True
+        assert score.hit is False
+        assert summary.judge_pass_rate == 0.0
