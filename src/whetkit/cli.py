@@ -78,6 +78,7 @@ def _summary_payload(group_name: str, summary, task_runs: list) -> dict:
                 "hit": score.hit,
                 "tool_hit": score.tool_hit,
                 "judge_passed": score.judge.passed if score.judge else None,
+                "spec_gap": score.spec_gap,
                 "called": score.tool_match.called,
                 "missing": score.tool_match.missing_slots,
                 "extra_calls": score.tool_match.extra_calls,
@@ -419,6 +420,14 @@ def run(
                 line += f"  judge={'pass' if score.judge.passed else 'FAIL'}"
             typer.echo(line)
         typer.echo("")
+        for score in summary.scores:
+            if score.spec_gap:
+                called = ", ".join(score.tool_match.called) or "(none)"
+                typer.echo(
+                    f"⚠ possible task-spec gap: '{score.task_id}' reached a correct "
+                    f"outcome (judge passed) via tools not listed in expected_tools "
+                    f"— called: {called}"
+                )
         for line in summary.summary_lines():
             typer.echo(line)
         tokens_in = sum(r.total_usage.input_tokens for r in task_runs)
