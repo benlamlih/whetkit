@@ -149,6 +149,19 @@ class TestAggregate:
         assert by_id["norun"].run_status == RunStatus.ERROR
         assert any("Hit-rate: 33%" in line for line in summary.summary_lines())
 
+    async def test_avg_extra_calls_counts_waste(self) -> None:
+        tasks = [
+            task(["a"]).model_copy(update={"id": "clean"}),
+            task(["b"]).model_copy(update={"id": "wasteful"}),
+        ]
+        runs = [
+            make_run(["a"]).model_copy(update={"task_id": "clean"}),
+            make_run(["x", "y", "b"]).model_copy(update={"task_id": "wasteful"}),
+        ]
+        summary = await score_runs(tasks, runs)
+        assert summary.avg_extra_calls == 1.0  # 0 + 2 extras over 2 tasks
+        assert any("Unnecessary calls (avg): 1.0/task" in s for s in summary.summary_lines())
+
     async def test_name_map_translates_curated_calls(self) -> None:
         # A curated run calls overlay-presented names; expected_tools use
         # origin names. Without the map this scored 0% (the curate bug).

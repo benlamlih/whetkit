@@ -45,6 +45,10 @@ Rules:
 - New names must be unique, snake_case, and descriptive (verb_object style).
 - Do not prune a tool that any task needs.
 - Rewrite descriptions for every tool you keep whose description is vague.
+- Cost matters, not just correctness: when a trace shows the agent taking an
+  expensive path (repeated calls, dump-everything tools, high token counts)
+  where a cheaper targeted tool exists, write descriptions that steer the
+  agent to the cheap path (say when to prefer this tool over its siblings).
 
 Respond with ONLY a JSON object, no markdown fences:
 {
@@ -85,6 +89,12 @@ def _trace_block(tasks: list[TaskSpec], runs: list[TaskRun], scores: list[TaskSc
         lines.append(f"### task {task.id} [{outcome}]")
         lines.append(f"user prompt: {task.prompt.strip()}")
         lines.append(f"tools called: {called or '(none)'}")
+        if run is not None:
+            usage = run.total_usage
+            lines.append(
+                f"cost: {len(run.called_tool_names)} call(s), "
+                f"{usage.input_tokens}/{usage.output_tokens} tokens in/out"
+            )
         if score.tool_match.missing_slots:
             lines.append(f"expected but never called (any of): {score.tool_match.missing_slots}")
         if score.tool_match.extra_calls:

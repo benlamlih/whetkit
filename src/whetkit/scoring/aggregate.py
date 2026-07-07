@@ -66,6 +66,14 @@ class EvalSummary(BaseModel):
             return 0.0
         return sum(s.tool_match.recall for s in self.scores) / len(self.scores)
 
+    @property
+    def avg_extra_calls(self) -> float:
+        """Unnecessary tool calls per task — a passing task can still waste
+        calls (and tokens) looping through the wrong tools first."""
+        if not self.scores:
+            return 0.0
+        return sum(len(s.tool_match.extra_calls) for s in self.scores) / len(self.scores)
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"Tasks: {self.task_count}",
@@ -73,6 +81,7 @@ class EvalSummary(BaseModel):
             f"Tool-selection hit-rate: {self.tool_hit_rate:.0%}",
             f"Tool precision (avg): {self.avg_precision:.0%}",
             f"Tool recall (avg): {self.avg_recall:.0%}",
+            f"Unnecessary calls (avg): {self.avg_extra_calls:.1f}/task",
         ]
         if (rate := self.judge_pass_rate) is not None:
             lines.insert(2, f"Judge pass-rate: {rate:.0%}")
