@@ -94,3 +94,29 @@ class TestWriteTasksYaml:
         assert content.startswith("# Drafted by 'whetkit generate'")
         loaded = load_tasks(out)
         assert [t.id for t in loaded] == ["find-mouse", "second"]
+
+
+class TestPromptShaping:
+    async def test_server_context_reaches_the_prompt(self) -> None:
+        provider = provider_returning(draft())
+        await generate_tasks(
+            inventory(),
+            "srv",
+            config=CONFIG,
+            provider=provider,
+            server_context="stdio: uvx mcp-server-git --repository /real/checkout",
+        )
+        prompt = provider.calls[0]["messages"][0].content
+        assert "/real/checkout" in prompt
+        assert "Never invent placeholder" in prompt
+
+    async def test_read_only_by_default_writes_on_opt_in(self) -> None:
+        provider = provider_returning(draft())
+        await generate_tasks(inventory(), "srv", config=CONFIG, provider=provider)
+        assert "ONLY read-only" in provider.calls[0]["system"]
+
+        provider2 = provider_returning(draft())
+        await generate_tasks(
+            inventory(), "srv", config=CONFIG, provider=provider2, allow_writes=True
+        )
+        assert "Write tasks are allowed" in provider2.calls[0]["system"]

@@ -18,7 +18,7 @@ from whetkit.mcp.introspect import ServerInventory
 
 DEFAULT_GENERATOR_MODEL = "anthropic:claude-sonnet-5"
 
-GENERATOR_SYSTEM_PROMPT = """\
+GENERATOR_SYSTEM_PROMPT_TEMPLATE = """\
 You write eval tasks for an AI-agent benchmark. You are given the tools an
 MCP server exposes. Draft tasks that measure whether an agent picks the
 right tools for realistic user requests.
@@ -32,9 +32,7 @@ Rules for every task:
   alternatives for that step. Use ONLY tool names from the given list.
 - success_criteria is one or two concrete, checkable sentences a grader can
   verify from the agent's final answer alone.
-- Prefer read-only tasks. Include a write task only when the tool set is
-  clearly built for writes, and never anything destructive or irreversible
-  (no deletes, resets, or purges).
+{writes_rule}
 - Set "ordered": true only when the steps must happen in sequence.
 - ids are short kebab-case slugs, unique across the set.
 
@@ -59,9 +57,37 @@ def _inventory_block(inventory: ServerInventory) -> str:
     return "\n".join(lines)
 
 
-def build_generator_prompt(inventory: ServerInventory, count: int) -> str:
+READ_ONLY_RULE = (
+    "- Draft ONLY read-only tasks: nothing that creates, modifies, deletes,\n"
+    "  or sends anything. If the tool set is write-heavy, still restrict\n"
+    "  yourself to its read/query tools."
+)
+WRITES_ALLOWED_RULE = (
+    "- Prefer read-only tasks. Write tasks are allowed when the tool set is\n"
+    "  clearly built for writes, but never anything destructive or\n"
+    "  irreversible (no deletes, resets, or purges)."
+)
+
+
+def generator_system_prompt(allow_writes: bool) -> str:
+    rule = WRITES_ALLOWED_RULE if allow_writes else READ_ONLY_RULE
+    # plain replace, not str.format — the template contains JSON braces
+    return GENERATOR_SYSTEM_PROMPT_TEMPLATE.replace("{writes_rule}", rule)
+
+
+def build_generator_prompt(inventory: ServerInventory, count: int, server_context: str = "") -> str:
+    context_block = ""
+    if server_context:
+        context_block = (
+            "## Execution context\n"
+            f"These tasks will execute against: {server_context}\n"
+            "Write prompts whose arguments fit THAT context — the real paths,\n"
+            "repositories, or resources it implies. Never invent placeholder\n"
+            "examples like /home/user/project or acme-corp/website.\n\n"
+        )
     return (
         f"## Tools exposed by the server\n{_inventory_block(inventory)}\n\n"
+        f"{context_block}"
         f"Draft exactly {count} eval tasks now."
     )
 
@@ -102,6 +128,8 @@ async def generate_tasks(
     count: int = 5,
     config: GeneratorConfig | None = None,
     provider: LLMProvider | None = None,
+    server_context: str = "",
+    allow_writes: bool = False,
 ) -> tuple[list[TaskSpec], list[str]]:
     """Draft ``count`` tasks for ``server``. Returns (tasks, warnings);
     drafts that fail validation are dropped, never written."""
@@ -109,12 +137,12 @@ async def generate_tasks(
     provider_name, model_id = parse_model(config.model)
     provider = provider or get_provider(provider_name)
 
-    prompt = build_generator_prompt(inventory, count)
+    prompt = build_generator_prompt(inventory, count, server_context=server_context)
     drafts = None
     for _attempt in range(2):
         turn = await provider.complete(
             model=model_id,
-            system=GENERATOR_SYSTEM_PROMPT,
+            system=generator_system_prompt(allow_writes),
             messages=[ChatMessage(role="user", content=prompt)],
             tools=[],
             max_tokens=config.max_tokens,
