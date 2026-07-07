@@ -297,6 +297,60 @@ def export(
 
 
 @app.command()
+def diff(
+    before: Annotated[str, typer.Argument(help="Baseline --summary-json file")],
+    after: Annotated[str, typer.Argument(help="Comparison --summary-json file")],
+) -> None:
+    """Compare two --summary-json files: headline deltas plus per-task
+    transitions. The before/after table without re-running anything."""
+    import json as jsonlib
+
+    docs = []
+    for path in (before, after):
+        if not Path(path).is_file():
+            raise typer.BadParameter(f"no summary file at {path}")
+        docs.append(jsonlib.loads(Path(path).read_text()))
+
+    def mean(doc: dict, key: str) -> float:
+        values = [r[key] for r in doc["runs"] if r.get(key) is not None]
+        return sum(values) / len(values) if values else 0.0
+
+    typer.echo(f"{'metric':<28} {'before':>10} {'after':>10}")
+    for label, key, fmt in (
+        ("Hit-rate", "hit_rate", "{:.0%}"),
+        ("Tool-selection hit-rate", "tool_hit_rate", "{:.0%}"),
+        ("Judge pass-rate", "judge_pass_rate", "{:.0%}"),
+        ("Precision (avg)", "avg_precision", "{:.0%}"),
+        ("Unnecessary calls/task", "avg_extra_calls", "{:.1f}"),
+        ("Tokens in (per run)", "tokens_in", "{:.0f}"),
+    ):
+        b, a = mean(docs[0], key), mean(docs[1], key)
+        typer.echo(f"{label:<28} {fmt.format(b):>10} {fmt.format(a):>10}")
+
+    def outcomes(doc: dict) -> dict[str, list[bool]]:
+        per_task: dict[str, list[bool]] = {}
+        for run_doc in doc["runs"]:
+            for task in run_doc["tasks"]:
+                per_task.setdefault(task["id"], []).append(bool(task["hit"]))
+        return per_task
+
+    before_tasks, after_tasks = outcomes(docs[0]), outcomes(docs[1])
+    typer.echo("")
+    for task_id in sorted(set(before_tasks) | set(after_tasks)):
+
+        def word(hits: list[bool] | None) -> str:
+            if not hits:
+                return "—"
+            if all(hits):
+                return "PASS"
+            return "MISS" if not any(hits) else f"FLAKY {sum(hits)}/{len(hits)}"
+
+        b_word, a_word = word(before_tasks.get(task_id)), word(after_tasks.get(task_id))
+        marker = "" if b_word == a_word else ("  ↑" if a_word == "PASS" else "  ↓")
+        typer.echo(f"  {task_id:<28} {b_word:>10} -> {a_word:<10}{marker}")
+
+
+@app.command()
 def run(
     tasks: Annotated[
         str, typer.Option("--tasks", help="Task YAML file or directory of task files")
