@@ -21,6 +21,21 @@ def test_version_flag() -> None:
     assert result.output.startswith("whetkit ")
 
 
+def test_run_missing_plan_is_friendly(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--plan",
+            str(tmp_path / "nope.yaml"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "no curation plan" in result.output
+
+
 def test_report_missing_plan_is_friendly(tmp_path: Path) -> None:
     result = runner.invoke(
         app,

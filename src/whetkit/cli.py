@@ -135,6 +135,16 @@ def run(
     group: Annotated[
         str, typer.Option("--group", help="Label for this batch of runs in the trace store")
     ] = "baseline",
+    plan: Annotated[
+        str | None,
+        typer.Option(
+            "--plan",
+            help=(
+                "Eval the curated view: apply this curation plan as an overlay "
+                "and score against origin tool names (for hand-tuned plans)"
+            ),
+        ),
+    ] = None,
     match_mode: Annotated[
         str, typer.Option("--match-mode", help="Tool matching: 'order_tolerant' or 'exact'")
     ] = "order_tolerant",
@@ -167,11 +177,28 @@ def run(
     use_judge = _judge_enabled(judge, judge_model)
     store_path = store or str(default_store_path())
 
+    from whetkit.mcp import MCPClient
+
+    client_factory = MCPClient
+    name_map: dict[str, str] | None = None
+    if plan is not None:
+        from functools import partial
+
+        from whetkit.curation import CuratedMCPClient, load_plan
+
+        if not Path(plan).is_file():
+            raise typer.BadParameter(f"no curation plan at {plan}")
+        curation_plan = load_plan(plan)
+        client_factory = partial(CuratedMCPClient, plan=curation_plan)
+        name_map = curation_plan.rename_map()
+
     async def _run() -> None:
         runs = []
         for task in task_list:
             typer.echo(f"running {task.id} ...", err=True)
-            runs.append(await run_task(task, servers[task.server], config))
+            runs.append(
+                await run_task(task, servers[task.server], config, client_factory=client_factory)
+            )
 
         with TraceStore(store_path) as trace_store:
             trace_store.save_runs(runs, run_group=group)
@@ -187,6 +214,7 @@ def run(
                 judge_config=JudgeConfig(model=judge_model),
                 judge_cache=cache,
                 use_judge=use_judge,
+                name_map=name_map,
             )
         finally:
             cache.close()

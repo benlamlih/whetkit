@@ -93,6 +93,14 @@ the hit-rate delta comes back.
 Stdio servers' own logs are hidden so they can't garble the output; set
 `WHETKIT_SERVER_LOGS=1` to see them when debugging a server that won't start.
 
+The plan is yours to edit: tweak a rename the optimizer got wrong, un-hide a
+tool, then re-score the curated view directly —
+
+```sh
+uv run whetkit run --server examples/sample-server --tasks examples/tasks \
+  --plan .whetkit/curation-plan.yaml --group curated-v2
+```
+
 **4. Use the curated view for real** — serve it to any MCP client:
 
 ```sh
