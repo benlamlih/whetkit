@@ -218,6 +218,13 @@ def generate(
     model: Annotated[
         str, typer.Option("--model", help="Generator model as provider:model_id")
     ] = "anthropic:claude-sonnet-5",
+    allow_writes: Annotated[
+        bool,
+        typer.Option(
+            "--allow-writes",
+            help="Let drafts include non-destructive write tasks (default: read-only only)",
+        ),
+    ] = False,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Draft eval tasks from the server's tool inventory (review before
@@ -227,7 +234,14 @@ def generate(
     spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
     tasks, warnings = asyncio.run(
-        generate_tasks(inventory, server, count=count, config=GeneratorConfig(model=model))
+        generate_tasks(
+            inventory,
+            server,
+            count=count,
+            config=GeneratorConfig(model=model),
+            server_context=spec.label(),
+            allow_writes=allow_writes,
+        )
     )
     for warning in warnings:
         typer.echo(f"warning: {warning}", err=True)
