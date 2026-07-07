@@ -38,6 +38,20 @@ def _resolve_task_servers(
     }
 
 
+def _write_report(report, out_dir: str) -> tuple[str, str]:
+    from pathlib import Path
+
+    from whetkit.report import render_html
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    html_path = out / "report.html"
+    json_path = out / "report.json"
+    html_path.write_text(render_html(report))
+    json_path.write_text(report.model_dump_json(indent=2))
+    return str(html_path), str(json_path)
+
+
 @app.callback()
 def main() -> None:
     """Evaluate and improve LLM agent tool selection on MCP servers."""
@@ -195,6 +209,9 @@ def curate(
     plan_path: Annotated[
         str, typer.Option("--plan", help="Where to write the curation plan YAML")
     ] = ".whetkit/curation-plan.yaml",
+    report_dir: Annotated[
+        str, typer.Option("--report-dir", help="Directory for report.html + report.json")
+    ] = ".whetkit",
     match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
     store: Annotated[str | None, typer.Option("--store")] = None,
@@ -276,6 +293,20 @@ def curate(
             trace_store.save_runs(baseline_runs, run_group="baseline")
             trace_store.save_runs(curated_runs, run_group="curated")
 
+        from whetkit.report import build_report
+
+        report = build_report(
+            task_list,
+            baseline_runs,
+            baseline,
+            curated_runs,
+            curated,
+            plan,
+            model=model,
+            server=next(iter(servers.values())).label(),
+        )
+        html_path, json_path = _write_report(report, report_dir)
+
         typer.echo("\n== before/after ==")
         typer.echo(f"{'task':<28} {'before':<8} {'after':<8}")
         curated_by_id = {s.task_id: s for s in curated.scores}
@@ -293,8 +324,91 @@ def curate(
             f"Precision: {baseline.avg_precision:.0%} -> {curated.avg_precision:.0%}"
         )
         typer.echo(f"Traces saved to {store_path} (groups 'baseline', 'curated')")
+        typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
     asyncio.run(_curate())
+
+
+@app.command()
+def report(
+    tasks: Annotated[
+        str, typer.Option("--tasks", help="Task YAML file or directory of task files")
+    ],
+    plan: Annotated[
+        str, typer.Option("--plan", help="Curation plan YAML used for the 'after' runs")
+    ] = ".whetkit/curation-plan.yaml",
+    before: Annotated[str, typer.Option("--before", help="Trace group for baseline")] = "baseline",
+    after: Annotated[str, typer.Option("--after", help="Trace group for curated")] = "curated",
+    judge: Annotated[str, typer.Option("--judge", help="'auto', 'on', or 'off'")] = "auto",
+    judge_model: Annotated[str, typer.Option("--judge-model")] = "anthropic:claude-sonnet-5",
+    match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
+    store: Annotated[str | None, typer.Option("--store")] = None,
+    out: Annotated[str, typer.Option("--out", help="Output directory")] = ".whetkit",
+) -> None:
+    """Rebuild the before/after report from stored traces (judge verdicts
+    come from the cache when available)."""
+    from whetkit.curation import load_plan
+    from whetkit.datasets import load_tasks
+    from whetkit.report import build_report
+    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.tracing import TraceStore, default_store_path
+
+    task_list = load_tasks(tasks)
+    curation_plan = load_plan(plan)
+    store_path = store or str(default_store_path())
+    use_judge = _judge_enabled(judge, judge_model)
+
+    with TraceStore(store_path) as trace_store:
+        before_runs = trace_store.load_runs(before)
+        after_runs = trace_store.load_runs(after)
+    if not before_runs or not after_runs:
+        raise typer.BadParameter(
+            f"trace store {store_path} has no runs for groups "
+            f"{before!r} and/or {after!r} — run 'whetkit curate' first"
+        )
+
+    async def _report() -> None:
+        cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
+        try:
+            judge_config = JudgeConfig(model=judge_model)
+            mode = MatchMode(match_mode)
+            before_summary = await score_runs(
+                task_list,
+                before_runs,
+                mode=mode,
+                judge_config=judge_config,
+                judge_cache=cache,
+                use_judge=use_judge,
+            )
+            after_summary = await score_runs(
+                task_list,
+                after_runs,
+                mode=mode,
+                judge_config=judge_config,
+                judge_cache=cache,
+                use_judge=use_judge,
+            )
+        finally:
+            cache.close()
+
+        comparison = build_report(
+            task_list,
+            before_runs,
+            before_summary,
+            after_runs,
+            after_summary,
+            curation_plan,
+            model=before_runs[0].model if before_runs else "",
+            server=before_runs[0].server if before_runs else "",
+        )
+        html_path, json_path = _write_report(comparison, out)
+        typer.echo(
+            f"Hit-rate: {before_summary.hit_rate:.0%} -> {after_summary.hit_rate:.0%} "
+            f"({len(comparison.improved)} improved, {len(comparison.regressed)} regressed)"
+        )
+        typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
+
+    asyncio.run(_report())
 
 
 @app.command()
