@@ -285,6 +285,7 @@ def curate(
                 judge_config=judge_config,
                 judge_cache=cache,
                 use_judge=use_judge,
+                name_map=plan.rename_map(),
             )
         finally:
             cache.close()
@@ -390,6 +391,7 @@ def report(
                 judge_config=judge_config,
                 judge_cache=cache,
                 use_judge=use_judge,
+                name_map=curation_plan.rename_map(),
             )
         finally:
             cache.close()

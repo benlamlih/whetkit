@@ -87,9 +87,13 @@ async def score_runs(
     judge_provider: LLMProvider | None = None,
     judge_cache: JudgeCache | None = None,
     use_judge: bool = False,
+    name_map: dict[str, str] | None = None,
 ) -> EvalSummary:
     """Score each run against its task. Runs and tasks are matched by id;
-    a task with no run is scored as a total miss."""
+    a task with no run is scored as a total miss.
+
+    ``name_map`` translates called tool names before matching (curated runs
+    call overlay-presented names, while ``expected_tools`` use origin names)."""
     runs_by_task = {run.task_id: run for run in runs}
     scores: list[TaskScore] = []
     for task in tasks:
@@ -106,11 +110,14 @@ async def score_runs(
         verdict = None
         if use_judge:
             verdict = await judge_run(task, run, judge_config, judge_provider, judge_cache)
+        called = run.called_tool_names
+        if name_map:
+            called = [name_map.get(name, name) for name in called]
         scores.append(
             TaskScore(
                 task_id=task.id,
                 run_status=run.status,
-                tool_match=score_tool_match(task, run.called_tool_names, mode),
+                tool_match=score_tool_match(task, called, mode),
                 judge=verdict,
             )
         )

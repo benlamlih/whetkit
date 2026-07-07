@@ -74,6 +74,16 @@ class CurationPlan(BaseModel):
             mapping[override.presented_name if override else name] = name
         return mapping
 
+    def rename_map(self) -> dict[str, str]:
+        """Map renamed presented names back to their origin tools. Tasks
+        declare ``expected_tools`` in origin names, so runs made through the
+        overlay must be translated through this map before scoring."""
+        return {
+            override.new_name: override.original_name
+            for override in self.overrides
+            if override.new_name is not None and not override.hidden
+        }
+
     def transform_tools(self, tools: list[types.Tool]) -> list[types.Tool]:
         """Present the origin's tool list through this plan."""
         presented: list[types.Tool] = []

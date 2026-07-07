@@ -149,6 +149,24 @@ class TestAggregate:
         assert by_id["norun"].run_status == RunStatus.ERROR
         assert any("Hit-rate: 33%" in line for line in summary.summary_lines())
 
+    async def test_name_map_translates_curated_calls(self) -> None:
+        # A curated run calls overlay-presented names; expected_tools use
+        # origin names. Without the map this scored 0% (the curate bug).
+        tasks = [task(["proc_ord", "inv_check"], ordered=True)]
+        runs = [make_run(["process_order", "check_inventory_quantity"])]
+
+        unmapped = await score_runs(tasks, runs)
+        assert unmapped.tool_hit_rate == 0.0
+
+        summary = await score_runs(
+            tasks,
+            runs,
+            name_map={"process_order": "proc_ord", "check_inventory_quantity": "inv_check"},
+        )
+        assert summary.tool_hit_rate == 1.0
+        (score,) = summary.scores
+        assert score.tool_match.called == ["proc_ord", "inv_check"]
+
     async def test_judge_failure_blocks_hit(self) -> None:
         tasks = [task(["a"])]
         runs = [make_run(["a"])]
