@@ -138,9 +138,7 @@ class TestDoctorCli:
         from whetkit.cli import app
 
         sample = Path(__file__).parent.parent / "examples" / "sample-server"
-        result = CliRunner().invoke(
-            app, ["doctor", "--server", str(sample), "--fail-on", "warn"]
-        )
+        result = CliRunner().invoke(app, ["doctor", "--server", str(sample), "--fail-on", "warn"])
         assert result.exit_code == 1
 
     def test_json_output_parses(self) -> None:

@@ -57,8 +57,7 @@ def _check_descriptions(tools: list[ToolInfo]) -> list[Finding]:
                     check="missing-description",
                     tools=[tool.name],
                     message=(
-                        f"{tool.name} has no description — the model can only "
-                        "guess from the name."
+                        f"{tool.name} has no description — the model can only guess from the name."
                     ),
                 )
             )
