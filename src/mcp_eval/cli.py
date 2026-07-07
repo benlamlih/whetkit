@@ -175,5 +175,143 @@ def run(
     asyncio.run(_run())
 
 
+@app.command()
+def curate(
+    tasks: Annotated[
+        str, typer.Option("--tasks", help="Task YAML file or directory of task files")
+    ],
+    server: Annotated[
+        str | None,
+        typer.Option("--server", help="Override the server every task runs against"),
+    ] = None,
+    model: Annotated[
+        str, typer.Option("--model", help="Agent model as provider:model_id")
+    ] = "anthropic:claude-sonnet-5",
+    optimizer_model: Annotated[
+        str, typer.Option("--optimizer-model", help="Curation model as provider:model_id")
+    ] = "anthropic:claude-sonnet-5",
+    judge: Annotated[str, typer.Option("--judge", help="'auto', 'on', or 'off'")] = "auto",
+    judge_model: Annotated[str, typer.Option("--judge-model")] = "anthropic:claude-sonnet-5",
+    plan_path: Annotated[
+        str, typer.Option("--plan", help="Where to write the curation plan YAML")
+    ] = ".mcp-eval/curation-plan.yaml",
+    match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
+    max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
+    store: Annotated[str | None, typer.Option("--store")] = None,
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Baseline-eval the server, propose a curation overlay, re-eval through
+    it, and show the before/after hit-rate."""
+    from mcp_eval.curation import CuratedMCPClient, propose_plan, save_plan
+    from mcp_eval.curation.optimizer import OptimizerConfig
+    from mcp_eval.datasets import load_tasks
+    from mcp_eval.mcp import inspect_server
+    from mcp_eval.runner import RunConfig, run_task
+    from mcp_eval.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from mcp_eval.tracing import TraceStore, default_store_path
+
+    task_list = load_tasks(tasks)
+    servers = _resolve_task_servers(task_list, server, http_mode)
+    config = RunConfig(model=model, max_turns=max_turns)
+    use_judge = _judge_enabled(judge, judge_model)
+    judge_config = JudgeConfig(model=judge_model)
+    mode = MatchMode(match_mode)
+    store_path = store or str(default_store_path())
+
+    async def _curate() -> None:
+        cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
+        try:
+            typer.echo("== baseline eval ==", err=True)
+            baseline_runs = []
+            for task in task_list:
+                typer.echo(f"running {task.id} ...", err=True)
+                baseline_runs.append(await run_task(task, servers[task.server], config))
+            baseline = await score_runs(
+                task_list,
+                baseline_runs,
+                mode=mode,
+                judge_config=judge_config,
+                judge_cache=cache,
+                use_judge=use_judge,
+            )
+
+            typer.echo("== proposing curation plan ==", err=True)
+            inventory = await inspect_server(next(iter(servers.values())))
+            plan, warnings = await propose_plan(
+                inventory,
+                task_list,
+                baseline_runs,
+                baseline.scores,
+                OptimizerConfig(model=optimizer_model),
+            )
+            for warning in warnings:
+                typer.echo(f"warning: {warning}", err=True)
+            save_plan(plan, plan_path)
+            typer.echo(f"curation plan written to {plan_path}", err=True)
+
+            typer.echo("== curated eval (through overlay) ==", err=True)
+            curated_runs = []
+            for task in task_list:
+                typer.echo(f"running {task.id} ...", err=True)
+                curated_runs.append(
+                    await run_task(
+                        task,
+                        servers[task.server],
+                        config,
+                        client_factory=lambda spec: CuratedMCPClient(spec, plan),
+                    )
+                )
+            curated = await score_runs(
+                task_list,
+                curated_runs,
+                mode=mode,
+                judge_config=judge_config,
+                judge_cache=cache,
+                use_judge=use_judge,
+            )
+        finally:
+            cache.close()
+
+        with TraceStore(store_path) as trace_store:
+            trace_store.save_runs(baseline_runs, run_group="baseline")
+            trace_store.save_runs(curated_runs, run_group="curated")
+
+        typer.echo("\n== before/after ==")
+        typer.echo(f"{'task':<28} {'before':<8} {'after':<8}")
+        curated_by_id = {s.task_id: s for s in curated.scores}
+        for score in baseline.scores:
+            after = curated_by_id.get(score.task_id)
+            typer.echo(
+                f"{score.task_id:<28} "
+                f"{'PASS' if score.hit else 'MISS':<8} "
+                f"{('PASS' if after.hit else 'MISS') if after else '?':<8}"
+            )
+        typer.echo("")
+        typer.echo(
+            f"Hit-rate: {baseline.hit_rate:.0%} -> {curated.hit_rate:.0%}   "
+            f"Tool hit-rate: {baseline.tool_hit_rate:.0%} -> {curated.tool_hit_rate:.0%}   "
+            f"Precision: {baseline.avg_precision:.0%} -> {curated.avg_precision:.0%}"
+        )
+        typer.echo(f"Traces saved to {store_path} (groups 'baseline', 'curated')")
+
+    asyncio.run(_curate())
+
+
+@app.command()
+def overlay(
+    server: Annotated[
+        str, typer.Option("--server", help="Origin MCP server: URL, directory, or file path")
+    ],
+    plan: Annotated[str, typer.Option("--plan", help="Curation plan YAML to apply")],
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Serve the curated view of a server as a stdio MCP server (reversible:
+    the origin is never modified)."""
+    from mcp_eval.curation import load_plan, serve_overlay
+
+    origin = resolve_server_spec(server, http_mode=http_mode)
+    asyncio.run(serve_overlay(origin, load_plan(plan)))
+
+
 if __name__ == "__main__":
     app()

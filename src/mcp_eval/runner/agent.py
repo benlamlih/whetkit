@@ -9,6 +9,7 @@ recovers from a bad call can still succeed.
 
 import json
 import time
+from collections.abc import Callable
 
 import mcp.types as types
 from pydantic import BaseModel
@@ -59,8 +60,13 @@ async def run_task(
     server: ServerSpec,
     config: RunConfig | None = None,
     provider: LLMProvider | None = None,
+    client_factory: Callable[[ServerSpec], MCPClient] = MCPClient,
 ) -> TaskRun:
-    """Run one task's agent loop against a live MCP server."""
+    """Run one task's agent loop against a live MCP server.
+
+    ``client_factory`` lets callers interpose a transforming client (e.g. the
+    curation overlay) between the agent and the origin server.
+    """
     config = config or RunConfig()
     provider_name, model_id = parse_model(config.model)
     provider = provider or get_provider(provider_name)
@@ -69,7 +75,7 @@ async def run_task(
     messages: list[ChatMessage] = [ChatMessage(role="user", content=task.prompt)]
 
     try:
-        async with MCPClient(server) as client:
+        async with client_factory(server) as client:
             mcp_tools = await client.list_tools()
             tool_defs = [
                 ToolDef(
