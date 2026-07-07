@@ -17,6 +17,7 @@ Three connection modes are supported, because real-world servers are mixed:
 
 import json
 import os
+import re
 import shutil
 import sys
 from collections.abc import AsyncIterator
@@ -105,8 +106,33 @@ def resolve_server_spec(value: str, http_mode: HttpMode = HttpMode.STATEFUL) -> 
     raise ValueError(f"{value}: not a URL, directory, .json spec, or .py server")
 
 
+_ENV_REF_RE = re.compile(r"\$\{(\w+)\}")
+
+
+def _expand_env(value):
+    """Substitute ``${VAR}`` references from the environment in every string
+    of a spec document — so credentials (HTTP headers, child env) never have
+    to be written into server.json itself."""
+    if isinstance(value, str):
+
+        def sub(match: re.Match) -> str:
+            name = match.group(1)
+            if (resolved := os.environ.get(name)) is None:
+                raise ValueError(
+                    f"server spec references ${{{name}}} but it is not set in the environment"
+                )
+            return resolved
+
+        return _ENV_REF_RE.sub(sub, value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(v) for v in value]
+    return value
+
+
 def _spec_from_json(path: Path) -> ServerSpec:
-    data = json.loads(path.read_text())
+    data = _expand_env(json.loads(path.read_text()))
     spec = spec_from_dict(data)
     if isinstance(spec, StdioSpec):
         spec.command = _python_command(spec.command)
