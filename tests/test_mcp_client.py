@@ -128,3 +128,46 @@ def test_estimate_tokens_and_complexity() -> None:
         },
     }
     assert schema_complexity(nested) > schema_complexity(flat) > 0
+
+
+class TestEnvExpansion:
+    def test_env_refs_expand_in_headers_and_env(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        from whetkit.mcp import resolve_server_spec
+
+        monkeypatch.setenv("UNIT_TOKEN", "sekret")
+        spec_file = tmp_path / "server.json"
+        spec_file.write_text(
+            json.dumps(
+                {
+                    "kind": "http",
+                    "url": "https://api.example.com/mcp",
+                    "headers": {"Authorization": "Bearer ${UNIT_TOKEN}"},
+                }
+            )
+        )
+        spec = resolve_server_spec(str(spec_file))
+        assert spec.headers["Authorization"] == "Bearer sekret"
+
+    def test_missing_env_ref_names_the_variable(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        import pytest
+
+        from whetkit.mcp import resolve_server_spec
+
+        monkeypatch.delenv("UNIT_MISSING", raising=False)
+        spec_file = tmp_path / "server.json"
+        spec_file.write_text(
+            json.dumps(
+                {
+                    "kind": "stdio",
+                    "command": "python",
+                    "args": ["server.py"],
+                    "env": {"API_KEY": "${UNIT_MISSING}"},
+                }
+            )
+        )
+        with pytest.raises(ValueError, match="UNIT_MISSING"):
+            resolve_server_spec(str(spec_file))
