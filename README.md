@@ -17,6 +17,7 @@ surface, applies it through a reversible proxy, and re-runs the same evals to
 quantify the improvement.
 
 ```text
+whetkit doctor   ──►  ten-second lint of the tool surface        (no tasks, no API key)
 whetkit inspect  ──►  what does the agent actually see?
 whetkit run      ──►  how often does it pick the right tools?   (hit-rate)
 whetkit curate   ──►  fix the tool set, prove it helped          (before → after)
@@ -125,6 +126,7 @@ back to the original world.
 
 | Command | What it does |
 |---|---|
+| `whetkit doctor` | Lint the tool surface: vague descriptions, cryptic names, near-duplicates, context bloat. `--json`; `--fail-on warn` for CI. |
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
 | `whetkit run` | Agentic eval loop with real tool execution; scored results + traces. `--plan` scores a curated view. |
 | `whetkit curate` | Baseline → LLM-proposed overlay plan → curated eval → before/after report. |
