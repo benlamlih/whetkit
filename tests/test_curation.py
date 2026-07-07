@@ -197,10 +197,11 @@ class TestOptimizer:
         assert "sys_ping" not in by_original  # no-op keep dropped
         assert any("unknown tool" in w for w in warnings)
 
-        # the optimizer saw the inventory and the failure evidence
+        # the optimizer saw the inventory, the failure evidence, and the cost
         prompt = provider.calls[0]["messages"][0].content
         assert "data_query_1" in prompt
         assert "Find wireless mice" in prompt
+        assert "tokens in/out" in prompt
 
     async def test_unparseable_proposal_keeps_origin_tool_set(self) -> None:
         inventory = await inspect_server(resolve_server_spec(str(SAMPLE_SERVER)))
