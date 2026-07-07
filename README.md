@@ -40,8 +40,8 @@ through an overlay, and show the hit-rate delta.
 uv tool install whetkit   # or: uvx whetkit / pipx install whetkit
 ```
 
-(Releases are published to PyPI from tags — see [RELEASING.md](RELEASING.md).
-Until the first release, use the from-source quickstart below.)
+(Released to PyPI from tags — see [RELEASING.md](RELEASING.md). PyPI can lag
+behind main; the quickstart below runs from source.)
 
 ## Quickstart (5 minutes)
 
@@ -126,7 +126,7 @@ back to the original world.
 | Command | What it does |
 |---|---|
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
-| `whetkit run` | Agentic eval loop with real tool execution; scored results + traces. |
+| `whetkit run` | Agentic eval loop with real tool execution; scored results + traces. `--plan` scores a curated view. |
 | `whetkit curate` | Baseline → LLM-proposed overlay plan → curated eval → before/after report. |
 | `whetkit report` | Rebuild the HTML/JSON report from stored traces. |
 | `whetkit overlay` | Serve the curated view as a stdio MCP server. |
@@ -151,7 +151,7 @@ More docs: [docs/task-format.md](docs/task-format.md) ·
 
 ```sh
 uv sync
-uv run pytest        # 55+ tests, no API key needed (scripted fake provider)
+uv run pytest        # full suite, no API key needed (scripted fake provider)
 uv run ruff check .
 ```
 
