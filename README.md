@@ -29,6 +29,15 @@ without touching a line of server code, because the fix is metadata.
 whetkit makes that loop measurable: score the failures, patch the metadata
 through an overlay, and show the hit-rate delta.
 
+## Install
+
+```sh
+uv tool install whetkit   # or: uvx whetkit / pipx install whetkit
+```
+
+(Releases are published to PyPI from tags — see [RELEASING.md](RELEASING.md).
+Until the first release, use the from-source quickstart below.)
+
 ## Quickstart (5 minutes)
 
 Requires [uv](https://docs.astral.sh/uv/) and an Anthropic API key (or
