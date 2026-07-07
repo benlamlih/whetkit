@@ -205,6 +205,47 @@ def generate(
 
 
 @app.command()
+def export(
+    plan: Annotated[
+        str, typer.Option("--plan", help="Curation plan YAML to export")
+    ] = ".whetkit/curation-plan.yaml",
+    to: Annotated[
+        str,
+        typer.Option(
+            "--to",
+            help=(
+                "'markdown' — a fix report ready for an upstream issue/PR; "
+                "'json' — a neutral override list for gateways and scripts"
+            ),
+        ),
+    ] = "markdown",
+    out: Annotated[str | None, typer.Option("--out", help="Write here instead of stdout")] = None,
+) -> None:
+    """Export a curation plan as a shareable fix report or neutral JSON."""
+    from whetkit.curation import load_plan
+    from whetkit.curation.export import plan_to_json, plan_to_markdown
+
+    if to not in ("markdown", "json"):
+        raise typer.BadParameter("--to must be 'markdown' or 'json'")
+    if not Path(plan).is_file():
+        raise typer.BadParameter(
+            f"no curation plan at {plan} — run 'whetkit curate' first, or pass --plan"
+        )
+    curation_plan = load_plan(plan)
+    if not curation_plan.overrides:
+        typer.echo("plan has no overrides — nothing to export", err=True)
+        raise typer.Exit(code=1)
+
+    rendered = (plan_to_markdown if to == "markdown" else plan_to_json)(curation_plan)
+    if out:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(rendered)
+        typer.echo(f"wrote {out}")
+    else:
+        typer.echo(rendered, nl=False)
+
+
+@app.command()
 def run(
     tasks: Annotated[
         str, typer.Option("--tasks", help="Task YAML file or directory of task files")
