@@ -144,3 +144,39 @@ def test_judge_enabled_logic(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     assert _judge_enabled("auto", "anthropic:m") is True
     assert _judge_enabled("auto", "openai:m") is False
+
+
+def test_diff_compares_two_summaries(tmp_path: Path) -> None:
+    import json
+
+    def doc(hit: float, extras: float, task_hit: bool):
+        return {
+            "runs": [
+                {
+                    "hit_rate": hit,
+                    "tool_hit_rate": hit,
+                    "judge_pass_rate": hit,
+                    "avg_precision": hit,
+                    "avg_extra_calls": extras,
+                    "tokens_in": 1000,
+                    "tasks": [{"id": "trap-task", "hit": task_hit}],
+                }
+            ]
+        }
+
+    before = tmp_path / "before.json"
+    after = tmp_path / "after.json"
+    before.write_text(json.dumps(doc(0.8, 1.8, False)))
+    after.write_text(json.dumps(doc(1.0, 0.2, True)))
+
+    result = runner.invoke(app, ["diff", str(before), str(after)])
+    assert result.exit_code == 0
+    assert "80%" in result.output and "100%" in result.output
+    assert "trap-task" in result.output
+    assert "MISS" in result.output and "PASS" in result.output and "↑" in result.output
+
+
+def test_diff_missing_file_is_friendly(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["diff", str(tmp_path / "a.json"), str(tmp_path / "b.json")])
+    assert result.exit_code != 0
+    assert "no summary file" in result.output
