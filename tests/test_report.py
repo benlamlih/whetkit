@@ -143,16 +143,27 @@ class TestRenderHtml:
         html_text = render_html(report)
 
         assert html_text.startswith("<!DOCTYPE html>")
-        # self-contained: no external asset references
-        assert not re.search(r'(src|href)\s*=\s*["\']https?://', html_text)
+        # self-contained: no scripts, no external stylesheets/fonts/images
         assert "<script" not in html_text
+        assert "<link" not in html_text
+        assert "@import" not in html_text
+        assert not re.search(r'src\s*=\s*["\']https?://', html_text)
 
-        # headline numbers and structure are present
-        assert "0% → 50%" in html_text
+        # headline: 0% -> 50% hit-rate, +50 points delta
+        assert "before curation" in html_text
+        assert "after curation" in html_text
+        assert "+50" in html_text
+        assert "TOOL-SELECTION ACCURACY" in html_text
+
+        # per-task table, curation cards, and traces are present
+        assert "do stays-bad" in html_text
         assert "search_products" in html_text
-        assert "stays-bad" in html_text
-        assert "improved" in html_text
+        assert "PRUNED · 1" in html_text
+        assert "RENAMED · 1" in html_text
+        assert "improved on 1 task" in html_text
         assert "renamed the cryptic search tool" in html_text
+        assert "BEFORE · raw tool set" in html_text
+        assert "<details open" in html_text  # first improved task starts expanded
 
     def test_escapes_untrusted_text(self) -> None:
         report, _ = build_fixture_report()

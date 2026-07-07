@@ -295,6 +295,7 @@ def curate(
 
         from whetkit.report import build_report
 
+        origin_names = {t.name for t in inventory.tools}
         report = build_report(
             task_list,
             baseline_runs,
@@ -304,6 +305,8 @@ def curate(
             plan,
             model=model,
             server=next(iter(servers.values())).label(),
+            tools_before=inventory.tool_count,
+            tools_after=len(plan.presented_to_original(origin_names)),
         )
         html_path, json_path = _write_report(report, report_dir)
 

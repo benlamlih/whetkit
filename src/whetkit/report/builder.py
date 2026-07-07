@@ -1,11 +1,22 @@
 """Assemble the before/after comparison from two scored eval batches."""
 
-from pydantic import BaseModel
+import json
+from datetime import UTC, datetime
+
+from pydantic import BaseModel, Field
 
 from whetkit.curation.plan import CurationPlan, ToolOverride
 from whetkit.datasets import TaskSpec
 from whetkit.scoring import EvalSummary, TaskScore
 from whetkit.tracing import TaskRun
+
+
+class CallView(BaseModel):
+    """One tool call as shown in the report's trace panel."""
+
+    name: str
+    args: str = ""
+    is_error: bool = False
 
 
 class SideView(BaseModel):
@@ -17,6 +28,8 @@ class SideView(BaseModel):
     judge_rationale: str | None = None
     tools_called: list[str] = []
     missing_slots: list[list[str]] = []
+    calls: list[CallView] = []
+    final_text: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
@@ -24,6 +37,14 @@ class SideView(BaseModel):
     @classmethod
     def from_score(cls, score: TaskScore, run: TaskRun | None) -> "SideView":
         usage = run.total_usage if run else None
+        calls = []
+        if run:
+            for turn in run.turns:
+                for call in turn.tool_calls:
+                    args = json.dumps(call.arguments, separators=(", ", ": "))
+                    if len(args) > 80:
+                        args = args[:77] + "…"
+                    calls.append(CallView(name=call.name, args=args, is_error=call.is_error))
         return cls(
             hit=score.hit,
             tool_hit=score.tool_hit,
@@ -31,6 +52,8 @@ class SideView(BaseModel):
             judge_rationale=score.judge.rationale if score.judge else None,
             tools_called=score.tool_match.called,
             missing_slots=score.tool_match.missing_slots,
+            calls=calls,
+            final_text=run.final_text if run else None,
             input_tokens=usage.input_tokens if usage else 0,
             output_tokens=usage.output_tokens if usage else 0,
             latency_ms=run.total_latency_ms if run else 0.0,
@@ -94,11 +117,25 @@ class ComparisonReport(BaseModel):
     title: str = "whetkit before/after report"
     server: str = ""
     model: str = ""
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    tools_before: int | None = None
+    tools_after: int | None = None
     before: Totals
     after: Totals
     tasks: list[TaskComparison]
     plan: CurationPlan
     action_impacts: list[ActionImpact]
+
+    @property
+    def run_id(self) -> str:
+        """Short stable id derived from the report's content."""
+        import hashlib
+
+        payload = (
+            json.dumps([self.server, self.model, [t.task_id for t in self.tasks]], sort_keys=True)
+            + self.generated_at.isoformat()
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:6]
 
     @property
     def improved(self) -> list[TaskComparison]:
@@ -154,6 +191,8 @@ def build_report(
     plan: CurationPlan,
     model: str = "",
     server: str = "",
+    tools_before: int | None = None,
+    tools_after: int | None = None,
 ) -> ComparisonReport:
     baseline_runs_by_id = {r.task_id: r for r in baseline_runs}
     curated_runs_by_id = {r.task_id: r for r in curated_runs}
@@ -179,6 +218,8 @@ def build_report(
     return ComparisonReport(
         server=server,
         model=model,
+        tools_before=tools_before,
+        tools_after=tools_after,
         before=Totals.from_summary(baseline_summary, baseline_runs),
         after=Totals.from_summary(curated_summary, curated_runs),
         tasks=comparisons,
