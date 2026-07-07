@@ -250,20 +250,37 @@ def run(
             help="Completion-token budget per model turn (raise for reasoning models)",
         ),
     ] = 1024,
+    runs: Annotated[
+        int,
+        typer.Option(
+            "--runs",
+            help=(
+                "Repeat the whole task set N times and report mean plus range "
+                "— single runs are noise. Trace groups get a -1..-N suffix."
+            ),
+        ),
+    ] = 1,
     store: Annotated[
         str | None,
         typer.Option("--store", help="Trace SQLite path (default ./.whetkit/traces.sqlite3)"),
     ] = None,
     jsonl: Annotated[
-        str | None, typer.Option("--jsonl", help="Also write traces to this JSONL file")
+        str | None,
+        typer.Option(
+            "--jsonl",
+            help="Also write traces to this JSONL file (suffixed per run when --runs > 1)",
+        ),
     ] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Run eval tasks against an MCP server and print scored results."""
     from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig, run_task
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, MultiRunSummary, score_runs
     from whetkit.tracing import TraceStore, default_store_path, write_jsonl
+
+    if runs < 1:
+        raise typer.BadParameter("--runs must be at least 1")
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
@@ -286,34 +303,28 @@ def run(
         client_factory = partial(CuratedMCPClient, plan=curation_plan)
         name_map = curation_plan.rename_map()
 
-    async def _run() -> None:
-        runs = []
+    async def _run_once(group_name: str, cache: JudgeCache):
+        task_runs = []
         for task in task_list:
             typer.echo(f"running {task.id} ...", err=True)
-            runs.append(
+            task_runs.append(
                 await run_task(task, servers[task.server], config, client_factory=client_factory)
             )
 
         with TraceStore(store_path) as trace_store:
-            trace_store.save_runs(runs, run_group=group)
-        if jsonl:
-            write_jsonl(runs, jsonl)
+            trace_store.save_runs(task_runs, run_group=group_name)
 
-        cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
-        try:
-            summary = await score_runs(
-                task_list,
-                runs,
-                mode=MatchMode(match_mode),
-                judge_config=JudgeConfig(model=judge_model),
-                judge_cache=cache,
-                use_judge=use_judge,
-                name_map=name_map,
-            )
-        finally:
-            cache.close()
+        summary = await score_runs(
+            task_list,
+            task_runs,
+            mode=MatchMode(match_mode),
+            judge_config=JudgeConfig(model=judge_model),
+            judge_cache=cache,
+            use_judge=use_judge,
+            name_map=name_map,
+        )
 
-        typer.echo(f"\nResults (group '{group}', model {model}):")
+        typer.echo(f"\nResults (group '{group_name}', model {model}):")
         for score in summary.scores:
             mark = "PASS" if score.hit else "MISS"
             tools = " -> ".join(score.tool_match.called) or "(no tool calls)"
@@ -326,17 +337,37 @@ def run(
         typer.echo("")
         for line in summary.summary_lines():
             typer.echo(line)
-        tokens_in = sum(r.total_usage.input_tokens for r in runs)
-        tokens_out = sum(r.total_usage.output_tokens for r in runs)
+        tokens_in = sum(r.total_usage.input_tokens for r in task_runs)
+        tokens_out = sum(r.total_usage.output_tokens for r in task_runs)
         typer.echo(
             f"Tokens in/out: {tokens_in}/{tokens_out}   "
-            f"Total latency: {sum(r.total_latency_ms for r in runs) / 1000:.1f}s"
+            f"Total latency: {sum(r.total_latency_ms for r in task_runs) / 1000:.1f}s"
         )
+        return task_runs, summary
+
+    async def _run() -> None:
+        summaries = []
+        cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
+        try:
+            for run_index in range(1, runs + 1):
+                group_name = group if runs == 1 else f"{group}-{run_index}"
+                task_runs, summary = await _run_once(group_name, cache)
+                summaries.append(summary)
+                if jsonl:
+                    write_jsonl(task_runs, jsonl if runs == 1 else f"{jsonl}.{run_index}")
+        finally:
+            cache.close()
+
+        if runs > 1:
+            typer.echo(f"\n== across {runs} runs ==")
+            for line in MultiRunSummary(summaries=summaries).summary_lines():
+                typer.echo(line)
         if judge == "auto" and not use_judge:
             typer.echo(
                 "(LLM judge skipped: no API key found — set ANTHROPIC_API_KEY or pass --judge on)"
             )
-        typer.echo(f"Traces saved to {store_path} (group '{group}')")
+        suffix = f" (groups '{group}-1'..'-{runs}')" if runs > 1 else f" (group '{group}')"
+        typer.echo(f"Traces saved to {store_path}{suffix}")
 
     asyncio.run(_run())
 

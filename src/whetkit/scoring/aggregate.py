@@ -88,6 +88,51 @@ class EvalSummary(BaseModel):
         return lines
 
 
+class MultiRunSummary(BaseModel):
+    """Aggregate over repeated executions of the same task set.
+
+    Single runs are noise: the same server, tasks, and model can flip a
+    task between runs. The honest headline is mean plus range."""
+
+    summaries: list[EvalSummary]
+
+    @property
+    def n(self) -> int:
+        return len(self.summaries)
+
+    def _spread(self, values: list[float]) -> str:
+        mean = sum(values) / len(values)
+        low, high = min(values), max(values)
+        if low == high:
+            return f"{mean:.0%}"
+        return f"{mean:.0%} [{low:.0%}–{high:.0%}]"
+
+    def summary_lines(self) -> list[str]:
+        lines = [
+            f"Runs: {self.n} × {self.summaries[0].task_count} task(s)",
+            f"Hit-rate: {self._spread([s.hit_rate for s in self.summaries])}",
+            f"Tool-selection hit-rate: {self._spread([s.tool_hit_rate for s in self.summaries])}",
+            f"Tool precision (avg): {self._spread([s.avg_precision for s in self.summaries])}",
+        ]
+        judged = [s.judge_pass_rate for s in self.summaries if s.judge_pass_rate is not None]
+        if judged:
+            lines.insert(2, f"Judge pass-rate: {self._spread(judged)}")
+        extras = [s.avg_extra_calls for s in self.summaries]
+        lines.append(f"Unnecessary calls (avg): {sum(extras) / len(extras):.1f}/task")
+        flaky = self.flaky_tasks()
+        if flaky:
+            lines.append(f"Flaky tasks (hit in some runs, missed in others): {', '.join(flaky)}")
+        return lines
+
+    def flaky_tasks(self) -> list[str]:
+        """Task ids whose hit outcome differs across runs."""
+        outcomes: dict[str, set[bool]] = {}
+        for summary in self.summaries:
+            for score in summary.scores:
+                outcomes.setdefault(score.task_id, set()).add(score.hit)
+        return sorted(task_id for task_id, seen in outcomes.items() if len(seen) > 1)
+
+
 async def score_runs(
     tasks: list[TaskSpec],
     runs: list[TaskRun],

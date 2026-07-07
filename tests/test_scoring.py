@@ -180,6 +180,25 @@ class TestAggregate:
         (score,) = summary.scores
         assert score.tool_match.called == ["proc_ord", "inv_check"]
 
+    async def test_multi_run_summary_spread_and_flaky(self) -> None:
+        from whetkit.scoring import MultiRunSummary
+
+        tasks = [task(["a"]).model_copy(update={"id": "flaky"})]
+        good = await score_runs(tasks, [make_run(["a"]).model_copy(update={"task_id": "flaky"})])
+        bad = await score_runs(tasks, [make_run(["x"]).model_copy(update={"task_id": "flaky"})])
+
+        multi = MultiRunSummary(summaries=[good, good, bad])
+        assert multi.n == 3
+        assert multi.flaky_tasks() == ["flaky"]
+        lines = multi.summary_lines()
+        assert any("Runs: 3" in line for line in lines)
+        assert any("Hit-rate: 67% [0%–100%]" in line for line in lines)
+        assert any("Flaky tasks" in line and "flaky" in line for line in lines)
+
+        stable = MultiRunSummary(summaries=[good, good])
+        assert stable.flaky_tasks() == []
+        assert any("Hit-rate: 100%" in line for line in stable.summary_lines())
+
     async def test_judge_failure_blocks_hit(self) -> None:
         tasks = [task(["a"])]
         runs = [make_run(["a"])]
