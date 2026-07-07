@@ -17,10 +17,11 @@ surface, applies it through a reversible proxy, and re-runs the same evals to
 quantify the improvement.
 
 ```text
-whetkit doctor   ──►  ten-second lint of the tool surface        (no tasks, no API key)
-whetkit inspect  ──►  what does the agent actually see?
-whetkit run      ──►  how often does it pick the right tools?   (hit-rate)
-whetkit curate   ──►  fix the tool set, prove it helped          (before → after)
+whetkit doctor    ──►  ten-second lint of the tool surface        (no tasks, no API key)
+whetkit inspect   ──►  what does the agent actually see?
+whetkit generate  ──►  draft eval tasks from the inventory        (review, then run)
+whetkit run       ──►  how often does it pick the right tools?   (hit-rate)
+whetkit curate    ──►  fix the tool set, prove it helped          (before → after)
 ```
 
 ## Why tool curation matters
@@ -117,7 +118,10 @@ back to the original world.
   2026-07-28-spec servers), a directory containing `server.json` or
   `server.py`, or a `.py`/`.json` path directly.
 - Write tasks in YAML — format reference in
-  [docs/task-format.md](docs/task-format.md).
+  [docs/task-format.md](docs/task-format.md) — or draft them:
+  `whetkit generate --server <your-server> --out tasks/generated.yaml`
+  writes candidate tasks from the tool inventory (validated against the
+  live tool list; review before trusting).
 - `--model` / `--judge-model` / `--optimizer-model` take
   `provider:model_id`, e.g. `anthropic:claude-sonnet-5` or `openai:gpt-5.2`.
   Keys come from `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
@@ -128,6 +132,7 @@ back to the original world.
 |---|---|
 | `whetkit doctor` | Lint the tool surface: vague descriptions, cryptic names, near-duplicates, context bloat. `--json`; `--fail-on warn` for CI. |
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
+| `whetkit generate` | Draft eval tasks from the inventory; validated, review-before-trust YAML. |
 | `whetkit run` | Agentic eval loop with real tool execution; scored results + traces. `--plan` scores a curated view. |
 | `whetkit curate` | Baseline → LLM-proposed overlay plan → curated eval → before/after report. |
 | `whetkit report` | Rebuild the HTML/JSON report from stored traces. |
