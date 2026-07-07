@@ -51,6 +51,34 @@ def _write_report(report, out_dir: str) -> tuple[str, str]:
     return str(html_path), str(json_path)
 
 
+def _summary_payload(group_name: str, summary, task_runs: list) -> dict:
+    """One run's metrics as plain data — what --summary-json emits per run."""
+    return {
+        "group": group_name,
+        "hit_rate": summary.hit_rate,
+        "tool_hit_rate": summary.tool_hit_rate,
+        "judge_pass_rate": summary.judge_pass_rate,
+        "avg_precision": summary.avg_precision,
+        "avg_recall": summary.avg_recall,
+        "avg_extra_calls": summary.avg_extra_calls,
+        "tokens_in": sum(r.total_usage.input_tokens for r in task_runs),
+        "tokens_out": sum(r.total_usage.output_tokens for r in task_runs),
+        "latency_ms": sum(r.total_latency_ms for r in task_runs),
+        "tasks": [
+            {
+                "id": score.task_id,
+                "hit": score.hit,
+                "tool_hit": score.tool_hit,
+                "judge_passed": score.judge.passed if score.judge else None,
+                "called": score.tool_match.called,
+                "missing": score.tool_match.missing_slots,
+                "extra_calls": score.tool_match.extra_calls,
+            }
+            for score in summary.scores
+        ],
+    }
+
+
 def _version_callback(value: bool) -> None:
     if value:
         from importlib.metadata import version
@@ -312,6 +340,13 @@ def run(
             help="Also write traces to this JSONL file (suffixed per run when --runs > 1)",
         ),
     ] = None,
+    summary_json: Annotated[
+        str | None,
+        typer.Option(
+            "--summary-json",
+            help="Write a machine-readable summary (metrics + per-task outcomes) to this path",
+        ),
+    ] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Run eval tasks against an MCP server and print scored results."""
@@ -388,20 +423,23 @@ def run(
 
     async def _run() -> None:
         summaries = []
+        payloads = []
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
         try:
             for run_index in range(1, runs + 1):
                 group_name = group if runs == 1 else f"{group}-{run_index}"
                 task_runs, summary = await _run_once(group_name, cache)
                 summaries.append(summary)
+                payloads.append(_summary_payload(group_name, summary, task_runs))
                 if jsonl:
                     write_jsonl(task_runs, jsonl if runs == 1 else f"{jsonl}.{run_index}")
         finally:
             cache.close()
 
+        multi = MultiRunSummary(summaries=summaries)
         if runs > 1:
             typer.echo(f"\n== across {runs} runs ==")
-            for line in MultiRunSummary(summaries=summaries).summary_lines():
+            for line in multi.summary_lines():
                 typer.echo(line)
         if judge == "auto" and not use_judge:
             typer.echo(
@@ -409,6 +447,28 @@ def run(
             )
         suffix = f" (groups '{group}-1'..'-{runs}')" if runs > 1 else f" (group '{group}')"
         typer.echo(f"Traces saved to {store_path}{suffix}")
+
+        if summary_json:
+            import json as jsonlib
+
+            document = {
+                "model": model,
+                "judge_model": judge_model if use_judge else None,
+                "match_mode": match_mode,
+                "plan": plan,
+                "runs": payloads,
+            }
+            if runs > 1:
+                document["aggregate"] = {
+                    "n": multi.n,
+                    "hit_rate_mean": sum(s.hit_rate for s in summaries) / len(summaries),
+                    "hit_rate_min": min(s.hit_rate for s in summaries),
+                    "hit_rate_max": max(s.hit_rate for s in summaries),
+                    "flaky_tasks": multi.flaky_tasks(),
+                }
+            Path(summary_json).parent.mkdir(parents=True, exist_ok=True)
+            Path(summary_json).write_text(jsonlib.dumps(document, indent=2) + "\n")
+            typer.echo(f"Summary JSON: {summary_json}")
 
     asyncio.run(_run())
 

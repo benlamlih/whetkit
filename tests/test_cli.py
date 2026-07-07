@@ -92,6 +92,41 @@ def test_report_requires_existing_traces(tmp_path: Path) -> None:
     assert "whetkit curate" in result.output
 
 
+async def test_summary_payload_shape() -> None:
+    from whetkit.cli import _summary_payload
+    from whetkit.datasets import TaskSpec
+    from whetkit.scoring import score_runs
+    from whetkit.tracing import TaskRun, ToolCallRecord, TurnRecord
+
+    task = TaskSpec(id="t", prompt="p", server="s", expected_tools=["a"], success_criteria="c")
+    run = TaskRun(
+        task_id="t",
+        server="s",
+        model="m",
+        turns=[
+            TurnRecord(
+                index=0,
+                tool_calls=[
+                    ToolCallRecord(call_id="c1", name="a", result_text="ok"),
+                    ToolCallRecord(call_id="c2", name="x", result_text="ok"),
+                ],
+            )
+        ],
+    )
+    summary = await score_runs([task], [run])
+    payload = _summary_payload("baseline-1", summary, [run])
+    assert payload["group"] == "baseline-1"
+    assert payload["hit_rate"] == 1.0
+    assert payload["avg_extra_calls"] == 1.0
+    (task_entry,) = payload["tasks"]
+    assert task_entry["id"] == "t" and task_entry["hit"] is True
+    assert task_entry["called"] == ["a", "x"]
+    assert task_entry["extra_calls"] == ["x"]
+    import json
+
+    json.dumps(payload)  # must be plain-data serializable
+
+
 def test_judge_enabled_logic(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
