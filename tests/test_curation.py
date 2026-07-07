@@ -81,6 +81,16 @@ class TestPlan:
         save_plan(plan, tmp_path / "plan.yaml")
         assert load_plan(tmp_path / "plan.yaml") == plan
 
+    def test_rename_map_covers_renames_only(self) -> None:
+        plan = sample_plan()
+        plan.overrides.append(
+            ToolOverride(original_name="inv_check", new_description="Check stock.")
+        )
+        assert plan.rename_map() == {
+            "search_products": "data_query_1",
+            "send_order_notification": "do_thing",
+        }
+
 
 class TestCuratedClient:
     async def test_overlay_presents_and_delegates(self) -> None:
