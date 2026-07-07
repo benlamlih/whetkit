@@ -446,9 +446,15 @@ def run(
             typer.echo(line)
         tokens_in = sum(r.total_usage.input_tokens for r in task_runs)
         tokens_out = sum(r.total_usage.output_tokens for r in task_runs)
+        from whetkit.llm import parse_model
+        from whetkit.llm.pricing import estimate_cost_usd
+
+        cost = estimate_cost_usd(parse_model(model)[1], tokens_in, tokens_out)
+        cost_note = f"   ≈ ${cost:.4f} (est.)" if cost is not None else ""
         typer.echo(
             f"Tokens in/out: {tokens_in}/{tokens_out}   "
             f"Total latency: {sum(r.total_latency_ms for r in task_runs) / 1000:.1f}s"
+            f"{cost_note}"
         )
         return task_runs, summary
 
