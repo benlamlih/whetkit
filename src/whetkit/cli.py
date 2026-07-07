@@ -424,6 +424,16 @@ def run(
             help="Write a machine-readable summary (metrics + per-task outcomes) to this path",
         ),
     ] = None,
+    reset_cmd: Annotated[
+        str | None,
+        typer.Option(
+            "--reset-cmd",
+            help=(
+                "Shell command run before each repetition (and the first run) to "
+                "reset server-side fixtures — makes --runs honest on stateful servers"
+            ),
+        ),
+    ] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Run eval tasks against an MCP server and print scored results."""
@@ -518,6 +528,15 @@ def run(
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
         try:
             for run_index in range(1, runs + 1):
+                if reset_cmd:
+                    import subprocess
+
+                    typer.echo(f"reset: {reset_cmd}", err=True)
+                    proc = subprocess.run(reset_cmd, shell=True)
+                    if proc.returncode != 0:
+                        raise typer.BadParameter(
+                            f"--reset-cmd failed with exit code {proc.returncode}"
+                        )
                 group_name = group if runs == 1 else f"{group}-{run_index}"
                 task_runs, summary = await _run_once(group_name, cache)
                 summaries.append(summary)

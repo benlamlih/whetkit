@@ -180,3 +180,23 @@ def test_diff_missing_file_is_friendly(tmp_path: Path) -> None:
     result = runner.invoke(app, ["diff", str(tmp_path / "a.json"), str(tmp_path / "b.json")])
     assert result.exit_code != 0
     assert "no summary file" in result.output
+
+
+def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--reset-cmd",
+            "exit 3",
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "reset-cmd failed with exit code 3" in result.output
+    assert "Traceback" not in result.output
