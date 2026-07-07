@@ -83,9 +83,15 @@ This writes:
 - `.whetkit/report.json` — the same data, machine-readable
 - `.whetkit/traces.sqlite3` — full reasoning-path traces of every run
 
-Because the sample server's tasks fail mostly on tool selection, the curated
-overlay typically flips several tasks from MISS to HIT — that delta is the
-whole point.
+The sample server's failures are tool-selection failures, so weaker models
+flip several tasks from MISS to HIT through the overlay. Frontier models
+often ace even the messy baseline on a 14-tool server — there the delta
+shows up in the other columns instead: tools exposed, tokens per task, and
+extra calls. On large real-world servers (dozens of tools, near-duplicates)
+the hit-rate delta comes back.
+
+Stdio servers' own logs are hidden so they can't garble the output; set
+`WHETKIT_SERVER_LOGS=1` to see them when debugging a server that won't start.
 
 **4. Use the curated view for real** — serve it to any MCP client:
 

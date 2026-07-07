@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -39,8 +40,6 @@ def _resolve_task_servers(
 
 
 def _write_report(report, out_dir: str) -> tuple[str, str]:
-    from pathlib import Path
-
     from whetkit.report import render_html
 
     out = Path(out_dir)
@@ -52,8 +51,26 @@ def _write_report(report, out_dir: str) -> tuple[str, str]:
     return str(html_path), str(json_path)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"whetkit {version('whetkit')}")
+        raise typer.Exit()
+
+
 @app.callback()
-def main() -> None:
+def main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="Show the whetkit version and exit.",
+            callback=_version_callback,
+            is_eager=True,
+        ),
+    ] = False,
+) -> None:
     """Evaluate and improve LLM agent tool selection on MCP servers."""
 
 
@@ -122,6 +139,13 @@ def run(
         str, typer.Option("--match-mode", help="Tool matching: 'order_tolerant' or 'exact'")
     ] = "order_tolerant",
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
+    max_tokens: Annotated[
+        int,
+        typer.Option(
+            "--max-tokens",
+            help="Completion-token budget per model turn (raise for reasoning models)",
+        ),
+    ] = 1024,
     store: Annotated[
         str | None,
         typer.Option("--store", help="Trace SQLite path (default ./.whetkit/traces.sqlite3)"),
@@ -139,7 +163,7 @@ def run(
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns)
+    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
     use_judge = _judge_enabled(judge, judge_model)
     store_path = store or str(default_store_path())
 
@@ -180,6 +204,12 @@ def run(
         typer.echo("")
         for line in summary.summary_lines():
             typer.echo(line)
+        tokens_in = sum(r.total_usage.input_tokens for r in runs)
+        tokens_out = sum(r.total_usage.output_tokens for r in runs)
+        typer.echo(
+            f"Tokens in/out: {tokens_in}/{tokens_out}   "
+            f"Total latency: {sum(r.total_latency_ms for r in runs) / 1000:.1f}s"
+        )
         if not use_judge:
             typer.echo(
                 "(LLM judge skipped: no API key found — set ANTHROPIC_API_KEY or pass --judge on)"
@@ -214,6 +244,13 @@ def curate(
     ] = ".whetkit",
     match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
+    max_tokens: Annotated[
+        int,
+        typer.Option(
+            "--max-tokens",
+            help="Completion-token budget per model turn (raise for reasoning models)",
+        ),
+    ] = 1024,
     store: Annotated[str | None, typer.Option("--store")] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
@@ -229,7 +266,7 @@ def curate(
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns)
+    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
     mode = MatchMode(match_mode)
@@ -327,6 +364,12 @@ def curate(
             f"Tool hit-rate: {baseline.tool_hit_rate:.0%} -> {curated.tool_hit_rate:.0%}   "
             f"Precision: {baseline.avg_precision:.0%} -> {curated.avg_precision:.0%}"
         )
+        tok_before = (report.before.input_tokens + report.before.output_tokens) // len(task_list)
+        tok_after = (report.after.input_tokens + report.after.output_tokens) // len(task_list)
+        typer.echo(
+            f"Tools: {report.tools_before} -> {report.tools_after}   "
+            f"Tokens/task: {tok_before} -> {tok_after}"
+        )
         typer.echo(f"Traces saved to {store_path} (groups 'baseline', 'curated')")
         typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
@@ -358,6 +401,10 @@ def report(
     from whetkit.tracing import TraceStore, default_store_path
 
     task_list = load_tasks(tasks)
+    if not Path(plan).is_file():
+        raise typer.BadParameter(
+            f"no curation plan at {plan} — run 'whetkit curate' first, or pass --plan"
+        )
     curation_plan = load_plan(plan)
     store_path = store or str(default_store_path())
     use_judge = _judge_enabled(judge, judge_model)

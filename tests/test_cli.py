@@ -15,6 +15,28 @@ def test_help_lists_all_commands() -> None:
         assert command in result.output
 
 
+def test_version_flag() -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.output.startswith("whetkit ")
+
+
+def test_report_missing_plan_is_friendly(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--plan",
+            str(tmp_path / "nope.yaml"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "no curation plan" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_inspect_prints_inventory() -> None:
     result = runner.invoke(app, ["inspect", "--server", str(FIXTURES / "mini_server.py")])
     assert result.exit_code == 0
