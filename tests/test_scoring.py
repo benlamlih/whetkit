@@ -226,6 +226,36 @@ class TestAggregate:
         )
         assert summary2.scores[0].spec_gap is False
 
+    async def test_error_visibility_in_summary(self) -> None:
+        from whetkit.tracing import ToolCallRecord, TurnRecord
+
+        tasks = [
+            task(["a"]).model_copy(update={"id": "broken-calls"}),
+            task(["b"]).model_copy(update={"id": "dead-run"}),
+        ]
+        broken = TaskRun(
+            task_id="broken-calls",
+            server="s",
+            model="m",
+            turns=[
+                TurnRecord(
+                    index=0,
+                    tool_calls=[
+                        ToolCallRecord(call_id="c", name="a", result_text="boom", is_error=True)
+                    ],
+                )
+            ],
+        )
+        dead = TaskRun(
+            task_id="dead-run", server="s", model="m", status=RunStatus.ERROR, error="conn"
+        )
+        summary = await score_runs(tasks, [broken, dead])
+        assert summary.total_tool_errors == 1
+        assert summary.error_run_count == 1
+        lines = summary.summary_lines()
+        assert any("Errored runs: 1/2" in line for line in lines)
+        assert any("Failed tool calls: 1" in line for line in lines)
+
     async def test_judge_failure_blocks_hit(self) -> None:
         tasks = [task(["a"])]
         runs = [make_run(["a"])]

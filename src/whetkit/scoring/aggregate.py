@@ -15,6 +15,7 @@ class TaskScore(BaseModel):
     run_status: RunStatus
     tool_match: ToolMatchResult
     judge: JudgeVerdict | None = None
+    tool_errors: int = 0
 
     @property
     def tool_hit(self) -> bool:
@@ -82,6 +83,14 @@ class EvalSummary(BaseModel):
             return 0.0
         return sum(len(s.tool_match.extra_calls) for s in self.scores) / len(self.scores)
 
+    @property
+    def error_run_count(self) -> int:
+        return sum(s.run_status == RunStatus.ERROR for s in self.scores)
+
+    @property
+    def total_tool_errors(self) -> int:
+        return sum(s.tool_errors for s in self.scores)
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"Tasks: {self.task_count}",
@@ -93,6 +102,17 @@ class EvalSummary(BaseModel):
         ]
         if (rate := self.judge_pass_rate) is not None:
             lines.insert(2, f"Judge pass-rate: {rate:.0%}")
+        if self.error_run_count:
+            lines.append(
+                f"⚠ Errored runs: {self.error_run_count}/{self.task_count} — the agent "
+                "loop failed (connection/provider); scores below reflect failures, "
+                "not tool selection"
+            )
+        if self.total_tool_errors:
+            lines.append(
+                f"⚠ Failed tool calls: {self.total_tool_errors} — agents received "
+                "errors from the server; read the traces before trusting the scores"
+            )
         return lines
 
 
@@ -175,12 +195,14 @@ async def score_runs(
         called = run.called_tool_names
         if name_map:
             called = [name_map.get(name, name) for name in called]
+        tool_errors = sum(call.is_error for turn in run.turns for call in turn.tool_calls)
         scores.append(
             TaskScore(
                 task_id=task.id,
                 run_status=run.status,
                 tool_match=score_tool_match(task, called, mode),
                 judge=verdict,
+                tool_errors=tool_errors,
             )
         )
     return EvalSummary(scores=scores)

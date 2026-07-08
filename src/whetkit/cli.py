@@ -79,6 +79,8 @@ def _summary_payload(group_name: str, summary, task_runs: list) -> dict:
                 "tool_hit": score.tool_hit,
                 "judge_passed": score.judge.passed if score.judge else None,
                 "spec_gap": score.spec_gap,
+                "run_status": str(score.run_status),
+                "tool_errors": score.tool_errors,
                 "called": score.tool_match.called,
                 "missing": score.tool_match.missing_slots,
                 "extra_calls": score.tool_match.extra_calls,
