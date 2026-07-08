@@ -120,3 +120,9 @@ class TestPromptShaping:
             inventory(), "srv", config=CONFIG, provider=provider2, allow_writes=True
         )
         assert "Write tasks are allowed" in provider2.calls[0]["system"]
+
+    async def test_prompt_guards_against_volatile_criteria(self) -> None:
+        provider = provider_returning(draft())
+        await generate_tasks(inventory(), "srv", config=CONFIG, provider=provider)
+        system = provider.calls[0]["system"]
+        assert "volatile" in system and "flaky eval" in system
