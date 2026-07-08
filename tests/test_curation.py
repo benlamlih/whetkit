@@ -307,3 +307,15 @@ class TestRevision:
         )
         assert revised is previous
         assert any("keeping previous plan" in w for w in warnings)
+
+
+class TestOptimizerProviderFailure:
+    async def test_provider_failure_keeps_origin_tool_set(self) -> None:
+        inventory = await inspect_server(resolve_server_spec(str(SAMPLE_SERVER)))
+        provider = FakeProvider([])  # raises on any call
+        plan, warnings = await propose_plan(
+            inventory, [], [], [], OptimizerConfig(model="fake:opt"), provider
+        )
+        assert plan.overrides == []
+        assert any("optimizer call failed" in w for w in warnings)
+        assert any("keeping origin tool set" in w for w in warnings)
