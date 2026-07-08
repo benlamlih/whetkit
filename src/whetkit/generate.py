@@ -31,7 +31,11 @@ Rules for every task:
   is either one tool name, or a list of genuinely interchangeable
   alternatives for that step. Use ONLY tool names from the given list.
 - success_criteria is one or two concrete, checkable sentences a grader can
-  verify from the agent's final answer alone.
+  verify from the agent's final answer alone. When the data source is live
+  or changing (news pages, network traffic, timestamps, prices), grade the
+  SHAPE of the answer ("names the current top story", "lists the requests
+  that were observed"), never a specific volatile value — a criterion that
+  is wrong an hour later is a flaky eval, not a strict one.
 {writes_rule}
 - Set "ordered": true only when the steps must happen in sequence.
 - ids are short kebab-case slugs, unique across the set.
