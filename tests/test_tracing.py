@@ -103,3 +103,25 @@ def test_jsonl_roundtrip(tmp_path: Path) -> None:
 
     loaded = read_jsonl(path)
     assert loaded == runs
+
+
+def test_save_runs_replace_clears_group(tmp_path: Path) -> None:
+    with TraceStore(tmp_path / "traces.sqlite3") as store:
+        store.save_runs([make_run("t1")], run_group="baseline")
+        store.save_runs([make_run("stale")], run_group="other")
+        store.save_runs([make_run("t1"), make_run("t2")], run_group="baseline", replace=True)
+
+        assert [r.task_id for r in store.load_runs("baseline")] == ["t1", "t2"]
+        assert [r.task_id for r in store.load_runs("other")] == ["stale"]  # untouched
+
+
+def test_latest_runs_per_task_dedupes_and_counts(tmp_path: Path) -> None:
+    with TraceStore(tmp_path / "traces.sqlite3") as store:
+        store.save_runs([make_run("t1"), make_run("t2")], run_group="g")
+        store.save_runs([make_run("t1", status=RunStatus.MAX_TURNS)], run_group="g")
+
+        runs, dropped = store.latest_runs_per_task("g")
+        assert dropped == 1
+        by_id = {r.task_id: r for r in runs}
+        assert sorted(by_id) == ["t1", "t2"]
+        assert by_id["t1"].status == RunStatus.MAX_TURNS  # the most recent one won

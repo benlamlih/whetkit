@@ -103,8 +103,32 @@ class TraceStore:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
-    def save_runs(self, runs: Iterable[TaskRun], run_group: str) -> list[int]:
+    def save_runs(
+        self, runs: Iterable[TaskRun], run_group: str, replace: bool = False
+    ) -> list[int]:
+        """Save a batch under ``run_group``.
+
+        ``replace=True`` clears the group first — commands that write to
+        fixed group names (curate's ``baseline``/``curated``) must not
+        append across invocations, or report totals double-count.
+        """
+        if replace:
+            with self._conn:
+                self._conn.execute("DELETE FROM runs WHERE run_group = ?", (run_group,))
         return [self.save_run(run, run_group) for run in runs]
+
+    def latest_runs_per_task(self, run_group: str) -> tuple[list[TaskRun], int]:
+        """Load a group keeping only the most recent run per task.
+
+        Returns (runs, dropped_count). Groups written more than once (or with
+        --runs N) contain several runs per task; summing usage over all of
+        them silently inflates token/cost totals in reports.
+        """
+        runs = self.load_runs(run_group)
+        latest: dict[str, TaskRun] = {}
+        for run in runs:  # load order is insertion order — last one wins
+            latest[run.task_id] = run
+        return list(latest.values()), len(runs) - len(latest)
 
     def load_runs(self, run_group: str | None = None) -> list[TaskRun]:
         query = "SELECT record_json FROM runs"
