@@ -11,6 +11,21 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+def sanitize_untrusted(text: str) -> str:
+    """Neutralize prompt-delimiter tokens in third-party text before it is
+    embedded in an LLM prompt.
+
+    Tool descriptions, tool results, and agent answers are data from the
+    server under test: a hostile server can embed ``</tool_calls>``-style
+    closers or line-leading markdown headers to escape the delimited block
+    they sit in and forge graders' input. Escaping ``</`` makes it impossible
+    to close any XML-style tag; escaping a ``#`` right after a newline makes
+    it impossible to start a new markdown section. Deterministic, reversible
+    by eye, and dependency-free.
+    """
+    return text.replace("</", "<\\/").replace("\n#", "\n\\#")
+
+
 class ToolDef(BaseModel):
     """A tool offered to the model."""
 
