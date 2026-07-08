@@ -24,15 +24,41 @@ def _resolve_server(value: str, http_mode: HttpMode) -> ServerSpec:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _judge_enabled(judge: str, judge_model: str) -> bool:
-    """--judge auto: grade with the LLM judge only when its API key is set."""
-    if judge in ("on", "off"):
-        return judge == "on"
+def _judge_key_var(judge_model: str) -> str | None:
+    """The env var that holds the judge provider's API key."""
     from whetkit.llm import parse_model
 
     provider_name, _ = parse_model(judge_model)
-    key_var = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
+    return {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
+
+
+def _judge_enabled(judge: str, judge_model: str) -> bool:
+    """--judge auto: grade with the LLM judge only when its API key is set."""
+    if judge not in ("auto", "on", "off"):
+        # an unknown value used to silently mean 'auto' — refuse it instead
+        raise typer.BadParameter("--judge must be 'auto', 'on', or 'off'")
+    if judge in ("on", "off"):
+        return judge == "on"
+    key_var = _judge_key_var(judge_model)
     return bool(key_var and os.environ.get(key_var))
+
+
+def _judge_skip_hint(judge_model: str) -> str:
+    """The 'judge skipped' hint, naming the env var for THIS judge's provider."""
+    key_var = _judge_key_var(judge_model) or "the judge provider's API key"
+    return f"(LLM judge skipped: no API key found — set {key_var} or pass --judge on)"
+
+
+def _match_mode(value: str):
+    """Validate --match-mode where options are read: a typo must be a
+    BadParameter, not a ValueError traceback from inside the async body."""
+    from whetkit.scoring import MatchMode
+
+    try:
+        return MatchMode(value)
+    except ValueError as exc:
+        valid = ", ".join(f"'{m.value}'" for m in MatchMode)
+        raise typer.BadParameter(f"--match-mode must be one of: {valid}") from exc
 
 
 def _resolve_task_servers(
@@ -460,9 +486,14 @@ def diff(
             raise typer.BadParameter(f"no summary file at {path}")
         docs.append(jsonlib.loads(Path(path).read_text()))
 
-    def mean(doc: dict, key: str) -> float:
+    def mean(doc: dict, key: str) -> float | None:
         values = [r[key] for r in doc["runs"] if r.get(key) is not None]
-        return sum(values) / len(values) if values else 0.0
+        return sum(values) / len(values) if values else None
+
+    def cell(value: float | None, fmt: str) -> str:
+        # a metric absent from one file (e.g. judging was off) must render
+        # as "—", not fake a "0%" measurement that never happened
+        return "—" if value is None else fmt.format(value)
 
     typer.echo(f"{'metric':<28} {'before':>10} {'after':>10}")
     for label, key, fmt in (
@@ -474,7 +505,7 @@ def diff(
         ("Tokens in (per run)", "tokens_in", "{:.0f}"),
     ):
         b, a = mean(docs[0], key), mean(docs[1], key)
-        typer.echo(f"{label:<28} {fmt.format(b):>10} {fmt.format(a):>10}")
+        typer.echo(f"{label:<28} {cell(b, fmt):>10} {cell(a, fmt):>10}")
 
     def outcomes(doc: dict) -> dict[str, list[bool]]:
         per_task: dict[str, list[bool]] = {}
@@ -609,7 +640,7 @@ def run(
     """Run eval tasks against an MCP server and print scored results."""
     from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig, run_task
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, MultiRunSummary, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import TraceStore, default_store_path, write_jsonl
 
     if runs < 1:
@@ -618,6 +649,7 @@ def run(
         raise typer.BadParameter("--concurrency must be at least 1")
     if task_timeout <= 0:
         raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
@@ -671,7 +703,7 @@ def run(
         summary = await score_runs(
             task_list,
             task_runs,
-            mode=MatchMode(match_mode),
+            mode=mode,
             judge_config=JudgeConfig(model=judge_model),
             judge_cache=cache,
             use_judge=use_judge,
@@ -745,9 +777,7 @@ def run(
             for line in multi.summary_lines():
                 typer.echo(line)
         if judge == "auto" and not use_judge:
-            typer.echo(
-                "(LLM judge skipped: no API key found — set ANTHROPIC_API_KEY or pass --judge on)"
-            )
+            typer.echo(_judge_skip_hint(judge_model))
         suffix = f" (groups '{group}-1'..'-{runs}')" if runs > 1 else f" (group '{group}')"
         typer.echo(f"Traces saved to {store_path}{suffix}")
 
@@ -850,13 +880,14 @@ def curate(
     from whetkit.datasets import load_tasks
     from whetkit.mcp import MCPClient, inspect_server
     from whetkit.runner import RunConfig
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, MultiRunSummary, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import default_store_path
 
     if runs < 1:
         raise typer.BadParameter("--runs must be at least 1")
     if task_timeout <= 0:
         raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "curate")
@@ -865,7 +896,6 @@ def curate(
     )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
-    mode = MatchMode(match_mode)
     store_path = store or str(default_store_path())
 
     async def _curate() -> None:
@@ -1047,7 +1077,7 @@ def fix(
     from whetkit.curation.optimizer import OptimizerConfig, propose_revision
     from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, MultiRunSummary, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import default_store_path
 
     if max_iterations < 1:
@@ -1056,6 +1086,7 @@ def fix(
         raise typer.BadParameter("--runs must be at least 1")
     if task_timeout <= 0:
         raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "fix")
@@ -1064,7 +1095,6 @@ def fix(
     )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
-    mode = MatchMode(match_mode)
     store_path = store or str(default_store_path())
     optimizer_config = OptimizerConfig(model=optimizer_model)
 
@@ -1195,9 +1225,10 @@ def report(
     from whetkit.curation import load_plan
     from whetkit.datasets import load_tasks
     from whetkit.report import build_report
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, score_runs
     from whetkit.tracing import TraceStore, default_store_path
 
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     if not Path(plan).is_file():
         raise typer.BadParameter(
@@ -1227,7 +1258,6 @@ def report(
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
         try:
             judge_config = JudgeConfig(model=judge_model)
-            mode = MatchMode(match_mode)
             before_summary = await score_runs(
                 task_list,
                 before_runs,

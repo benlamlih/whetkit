@@ -195,6 +195,63 @@ def test_judge_enabled_logic(monkeypatch) -> None:
     assert _judge_enabled("auto", "openai:m") is False
 
 
+def test_judge_flag_rejects_unknown_values(tmp_path: Path) -> None:
+    import pytest
+    import typer
+
+    with pytest.raises(typer.BadParameter):
+        _judge_enabled("bananas", "anthropic:m")  # used to silently mean 'auto'
+
+    result = runner.invoke(
+        app,
+        ["run", "--tasks", str(_mini_task_file(tmp_path)), "--judge", "bananas"],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "--judge must be 'auto', 'on', or 'off'" in result.output
+
+
+def test_match_mode_rejected_at_parse_time_everywhere(tmp_path: Path) -> None:
+    tasks = str(_mini_task_file(tmp_path))
+    for command in ("run", "curate", "fix", "report"):
+        result = runner.invoke(app, [command, "--tasks", tasks, "--match-mode", "sloppy"])
+        assert result.exit_code != 0, command
+        assert "Traceback" not in result.output, command
+        assert "--match-mode must be one of: 'exact', 'order_tolerant'" in result.output, command
+
+
+def test_judge_skip_hint_names_the_judge_providers_env_var() -> None:
+    from whetkit.cli import _judge_skip_hint
+
+    assert "OPENAI_API_KEY" in _judge_skip_hint("openai:gpt-5.2")
+    assert "ANTHROPIC_API_KEY" in _judge_skip_hint("anthropic:claude-sonnet-5")
+    assert "pass --judge on" in _judge_skip_hint("openai:gpt-5.2")
+
+
+def test_run_judge_skip_hint_matches_judge_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _patch_agent_provider(monkeypatch, _agent_turns_miss())
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--model",
+            "fake:agent",
+            "--judge-model",
+            "openai:gpt-5.2",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "set OPENAI_API_KEY or pass --judge on" in result.output
+    assert "ANTHROPIC_API_KEY" not in result.output
+
+
 def test_diff_compares_two_summaries(tmp_path: Path) -> None:
     import json
 
@@ -229,6 +286,41 @@ def test_diff_missing_file_is_friendly(tmp_path: Path) -> None:
     result = runner.invoke(app, ["diff", str(tmp_path / "a.json"), str(tmp_path / "b.json")])
     assert result.exit_code != 0
     assert "no summary file" in result.output
+
+
+def test_diff_renders_dash_when_judging_was_absent(tmp_path: Path) -> None:
+    def doc(judge_rate: float | None):
+        return {
+            "runs": [
+                {
+                    "hit_rate": 0.5,
+                    "tool_hit_rate": 0.5,
+                    "judge_pass_rate": judge_rate,
+                    "avg_precision": 0.5,
+                    "avg_extra_calls": 1.0,
+                    "tokens_in": 10,
+                    "tasks": [{"id": "t", "hit": True}],
+                }
+            ]
+        }
+
+    def judge_line(before_doc: dict, after_doc: dict) -> str:
+        before = tmp_path / "before.json"
+        after = tmp_path / "after.json"
+        before.write_text(json.dumps(before_doc))
+        after.write_text(json.dumps(after_doc))
+        result = runner.invoke(app, ["diff", str(before), str(after)])
+        assert result.exit_code == 0, result.output
+        return next(ln for ln in result.output.splitlines() if "Judge pass-rate" in ln)
+
+    # judging absent on both sides: two dashes, never a fake "0% -> 0%"
+    line = judge_line(doc(None), doc(None))
+    assert line.count("—") == 2
+    assert "0%" not in line
+
+    # judging absent on one side only: dash there, real number on the other
+    line = judge_line(doc(None), doc(1.0))
+    assert "—" in line and "100%" in line
 
 
 def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
