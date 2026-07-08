@@ -641,6 +641,17 @@ def run(
         curation_plan = load_plan(plan)
         client_factory = partial(CuratedMCPClient, plan=curation_plan)
         name_map = curation_plan.rename_map()
+        # Validate the plan against every origin's live tool list before
+        # spending on runs: unknown targets or presented-name collisions
+        # would silently eval a broken curated view.
+        distinct_specs = {spec.model_dump_json(): spec for spec in servers.values()}
+        for origin_spec in distinct_specs.values():
+            origin_names = {t.name for t in asyncio.run(inspect_server(origin_spec)).tools}
+            if problems := curation_plan.validate_against(origin_names):
+                raise typer.BadParameter(
+                    f"curation plan {plan} is not valid for {origin_spec.label()}: "
+                    + "; ".join(problems)
+                )
 
     async def _run_once(group_name: str, cache: JudgeCache):
         semaphore = asyncio.Semaphore(concurrency)
@@ -1268,9 +1279,14 @@ def overlay(
     """Serve the curated view of a server as a stdio MCP server (reversible:
     the origin is never modified)."""
     from whetkit.curation import load_plan, serve_overlay
+    from whetkit.curation.overlay import InvalidPlanError
 
     origin = _resolve_server(server, http_mode)
-    asyncio.run(serve_overlay(origin, load_plan(plan)))
+    try:
+        asyncio.run(serve_overlay(origin, load_plan(plan)))
+    except InvalidPlanError as exc:
+        typer.echo(f"error: curation plan is not valid for this origin: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

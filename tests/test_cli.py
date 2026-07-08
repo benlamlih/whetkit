@@ -500,6 +500,92 @@ def test_fix_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypat
     assert groups == {"baseline-1", "baseline-2", "fix-1-1", "fix-1-2"}
 
 
+def _colliding_plan(tmp_path: Path) -> Path:
+    """A plan renaming two sample-server tools to the same presented name."""
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    plan_path = tmp_path / "bad-plan.yaml"
+    save_plan(
+        CurationPlan(
+            overrides=[
+                ToolOverride(original_name="data_query_1", new_name="search"),
+                ToolOverride(original_name="legacy_search", new_name="search"),
+            ]
+        ),
+        plan_path,
+    )
+    return plan_path
+
+
+def test_run_plan_is_validated_against_origin_before_running(tmp_path: Path, monkeypatch) -> None:
+    _forbid_agent_runs(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--plan",
+            str(_colliding_plan(tmp_path)),
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "not valid for" in result.output
+    assert "collision: 'search'" in result.output
+
+
+def test_run_accepts_a_valid_plan(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    agent = _patch_agent_provider(monkeypatch, _agent_turns_miss())
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(
+        CurationPlan(overrides=[ToolOverride(original_name="add", new_name="sum_numbers")]),
+        plan_path,
+    )
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--plan",
+            str(plan_path),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 1  # validation passed, the eval ran
+
+
+def test_overlay_refuses_invalid_plan_with_clear_error(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "overlay",
+            "--server",
+            str(Path(__file__).parent.parent / "examples" / "sample-server"),
+            "--plan",
+            str(_colliding_plan(tmp_path)),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "not valid for this origin" in result.output
+    assert "collision: 'search'" in result.output
+
+
 def test_task_timeout_must_be_positive(tmp_path: Path) -> None:
     tasks = str(_mini_task_file(tmp_path))
     for command in ("run", "curate", "fix"):

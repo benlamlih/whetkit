@@ -143,6 +143,31 @@ class TestCuratedClient:
             assert bad.isError
 
 
+class TestOverlayStartupValidation:
+    async def test_serve_overlay_refuses_invalid_plan(self) -> None:
+        from whetkit.curation import serve_overlay
+        from whetkit.curation.overlay import InvalidPlanError
+
+        spec = resolve_server_spec(str(SAMPLE_SERVER))
+        bad = CurationPlan(
+            overrides=[
+                ToolOverride(original_name="data_query_1", new_name="search"),
+                ToolOverride(original_name="legacy_search", new_name="search"),
+            ]
+        )
+        with pytest.raises(InvalidPlanError) as excinfo:
+            await serve_overlay(spec, bad)  # raises before ever binding stdio
+        assert "collision" in str(excinfo.value)
+        assert any("'search'" in p for p in excinfo.value.problems)
+
+    async def test_origin_tool_names_ignores_the_plan(self) -> None:
+        spec = resolve_server_spec(str(SAMPLE_SERVER))
+        async with CuratedMCPClient(spec, sample_plan()) as client:
+            names = await client.origin_tool_names()
+        assert "data_query_1" in names  # origin view, not the curated one
+        assert "search_products" not in names
+
+
 def _score(task: TaskSpec, run: TaskRun) -> TaskScore:
     return TaskScore(
         task_id=task.id,

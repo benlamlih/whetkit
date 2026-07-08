@@ -23,6 +23,14 @@ class UnknownCuratedTool(Exception):
     pass
 
 
+class InvalidPlanError(Exception):
+    """The plan fails validation against the origin's live tool list."""
+
+    def __init__(self, problems: list[str]):
+        super().__init__("; ".join(problems))
+        self.problems = problems
+
+
 class CuratedMCPClient(MCPClient):
     """MCPClient that shows plan-transformed tools and un-maps names on call."""
 
@@ -36,6 +44,10 @@ class CuratedMCPClient(MCPClient):
             origin_tools = await super().list_tools()
             self._name_map = self.plan.presented_to_original({t.name for t in origin_tools})
         return self._name_map
+
+    async def origin_tool_names(self) -> set[str]:
+        """The origin server's tool names, untransformed by the plan."""
+        return {t.name for t in await super().list_tools()}
 
     async def list_tools(self) -> list[types.Tool]:
         tools = await super().list_tools()
@@ -66,8 +78,15 @@ def build_overlay_server(client: CuratedMCPClient, name: str = "whetkit-overlay"
 
 
 async def serve_overlay(origin: ServerSpec, plan: CurationPlan) -> None:
-    """Run the overlay as a stdio MCP server until the client disconnects."""
+    """Run the overlay as a stdio MCP server until the client disconnects.
+
+    The plan is validated against the origin's live tool list first; serving
+    a plan with unknown targets or name collisions would silently present a
+    broken tool surface, so it raises :class:`InvalidPlanError` instead.
+    """
     async with CuratedMCPClient(origin, plan) as client:
+        if problems := plan.validate_against(await client.origin_tool_names()):
+            raise InvalidPlanError(problems)
         server = build_overlay_server(client)
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
