@@ -123,6 +123,12 @@ def _headline(report: ComparisonReport) -> str:
     p50_before = median([t.before.latency_ms for t in report.tasks]) / 1000 if total else 0
     p50_after = median([t.after.latency_ms for t in report.tasks]) / 1000 if total else 0
 
+    def spread_line(spread: str | None) -> str:
+        # mean [min–max] across repeated runs (--runs N); headline % is the last run
+        if not spread:
+            return ""
+        return f'<div class="mono" style="font-size:12px; color:{SUBTLE}; margin-top:6px;">mean across runs: {_e(spread)}</div>'
+
     if report.tools_before is not None and report.tools_after is not None:
         tools_card = f"""
       <div class="statcard">
@@ -145,14 +151,14 @@ def _headline(report: ComparisonReport) -> str:
       <div>
         <div class="mono" style="font-size:13px; color:{SUBTLE}; margin-bottom:10px;">before curation</div>
         <div style="display:flex; align-items:baseline; gap:4px; color:{AMBER};"><span class="mono" style="font-size:64px; font-weight:600; letter-spacing:-0.04em; line-height:0.9;">{before_pct}</span><span class="mono" style="font-size:26px;">%</span></div>
-        <div class="mono" style="font-size:12px; color:{MUTED}; margin-top:10px;">{before_hits} / {total} tasks correct</div>
+        <div class="mono" style="font-size:12px; color:{MUTED}; margin-top:10px;">{before_hits} / {total} tasks correct</div>{spread_line(report.before_spread)}
         <div class="bar"><div style="width:{before_pct}%; background:{AMBER};"></div></div>
       </div>
       <div style="color:{MUTED}; font-size:30px; padding:0 4px;">→</div>
       <div>
         <div class="mono" style="font-size:13px; color:{SUBTLE}; margin-bottom:10px;">after curation</div>
         <div style="display:flex; align-items:baseline; gap:4px; color:{GREEN};"><span class="mono" style="font-size:64px; font-weight:600; letter-spacing:-0.04em; line-height:0.9;">{after_pct}</span><span class="mono" style="font-size:26px;">%</span></div>
-        <div class="mono" style="font-size:12px; color:{MUTED}; margin-top:10px;">{after_hits} / {total} tasks correct</div>
+        <div class="mono" style="font-size:12px; color:{MUTED}; margin-top:10px;">{after_hits} / {total} tasks correct</div>{spread_line(report.after_spread)}
         <div class="bar"><div style="width:{after_pct}%; background:{GREEN};"></div></div>
       </div>
       <div style="text-align:center; padding-left:8px;">

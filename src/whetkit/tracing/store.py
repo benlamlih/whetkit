@@ -117,6 +117,21 @@ class TraceStore:
                 self._conn.execute("DELETE FROM runs WHERE run_group = ?", (run_group,))
         return [self.save_run(run, run_group) for run in runs]
 
+    def delete_group_family(self, base_group: str) -> int:
+        """Delete ``base_group`` and every ``base_group-*`` variant.
+
+        Repeated evals (--runs N) write suffixed groups (``baseline-1`` ..
+        ``baseline-N``); a re-run with a smaller N must not leave stale
+        repetitions behind, so replacement clears the whole family. Returns
+        how many runs were deleted.
+        """
+        with self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM runs WHERE run_group = ? OR run_group LIKE ?",
+                (base_group, f"{base_group}-%"),
+            )
+        return cursor.rowcount
+
     def latest_runs_per_task(self, run_group: str) -> tuple[list[TaskRun], int]:
         """Load a group keeping only the most recent run per task.
 

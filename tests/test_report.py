@@ -136,6 +136,25 @@ class TestBuildReport:
         assert len(data["tasks"]) == 2
         assert data["plan"]["overrides"][0]["new_name"] == "search_products"
 
+    def test_spread_strings_carried_through(self) -> None:
+        tasks = [task("flips", ["data_query_1"])]
+        runs = [run_for("flips", ["data_query_1"])]
+        summary = summary_for(tasks, runs)
+        report = build_report(
+            tasks,
+            runs,
+            summary,
+            runs,
+            summary,
+            PLAN,
+            before_spread="50% [0%–100%]",
+            after_spread="100%",
+        )
+        assert report.before_spread == "50% [0%–100%]"
+        assert report.after_spread == "100%"
+        data = json.loads(report.model_dump_json())
+        assert data["before_spread"] == "50% [0%–100%]"
+
 
 class TestRenderHtml:
     def test_self_contained_and_complete(self) -> None:
@@ -171,3 +190,13 @@ class TestRenderHtml:
         html_text = render_html(report)
         assert "<script>alert" not in html_text
         assert "&lt;script&gt;" in html_text
+
+    def test_spread_strings_render_next_to_headline(self) -> None:
+        report, _ = build_fixture_report()
+        assert "mean across runs" not in render_html(report)  # absent for single runs
+
+        report.before_spread = "50% [0%–100%]"
+        report.after_spread = "100%"
+        html_text = render_html(report)
+        assert html_text.count("mean across runs") == 2
+        assert "50% [0%–100%]" in html_text

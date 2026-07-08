@@ -199,6 +199,22 @@ class TestAggregate:
         assert stable.flaky_tasks() == []
         assert any("Hit-rate: 100%" in line for line in stable.summary_lines())
 
+    async def test_multi_run_means_and_spread_strings(self) -> None:
+        from whetkit.scoring import MultiRunSummary
+
+        tasks = [task(["a"])]
+        good = await score_runs(tasks, [make_run(["a"])])
+        bad = await score_runs(tasks, [make_run(["x"])])
+
+        multi = MultiRunSummary(summaries=[good, bad])
+        assert multi.mean_hit_rate == pytest.approx(0.5)
+        assert multi.mean_avg_precision == pytest.approx(0.5)
+        assert multi.mean_avg_extra_calls == pytest.approx(0.5)
+        assert multi.hit_rate_spread() == "50% [0%–100%]"
+        assert multi.tool_hit_rate_spread() == "50% [0%–100%]"
+        # identical runs collapse to a bare mean, no noise range
+        assert MultiRunSummary(summaries=[good, good]).hit_rate_spread() == "100%"
+
     async def test_spec_gap_flags_judge_pass_with_tool_miss(self) -> None:
         provider = FakeProvider(
             [

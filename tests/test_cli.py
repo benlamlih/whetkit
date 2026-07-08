@@ -1,11 +1,60 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from whetkit.cli import _judge_enabled, app
+from whetkit.llm import LLMTurn, ToolCall
+
+from .fakes import FakeProvider
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _mini_task_file(tmp_path: Path) -> Path:
+    """One task against the mini fixture server (expects the 'add' tool)."""
+    tasks = tmp_path / "task.yaml"
+    tasks.write_text(
+        f"id: add-two\n"
+        f"prompt: add 2 and 3\n"
+        f"server: {FIXTURES / 'mini_server.py'}\n"
+        f"expected_tools: [add]\n"
+        f"success_criteria: says 5\n"
+    )
+    return tasks
+
+
+def _agent_turns_hit() -> list[LLMTurn]:
+    """One agent run that calls the expected tool, then answers."""
+    return [
+        LLMTurn(tool_calls=[ToolCall(id="c1", name="add", arguments={"a": 2, "b": 3})]),
+        LLMTurn(text="2 + 3 = 5"),
+    ]
+
+
+def _agent_turns_miss() -> list[LLMTurn]:
+    """One agent run that answers without any tool call."""
+    return [LLMTurn(text="no idea")]
+
+
+def _patch_agent_provider(monkeypatch, script: list[LLMTurn]) -> FakeProvider:
+    provider = FakeProvider(script)
+    monkeypatch.setattr("whetkit.runner.agent.get_provider", lambda name: provider)
+    return provider
+
+
+def _patch_optimizer_provider(monkeypatch, overrides: list | None = None) -> FakeProvider:
+    proposal = {"notes": "no changes needed", "overrides": overrides or []}
+    provider = FakeProvider([LLMTurn(text=json.dumps(proposal))])
+    monkeypatch.setattr("whetkit.curation.optimizer.get_provider", lambda name: provider)
+    return provider
+
+
+def _agent_run_count(provider: FakeProvider) -> int:
+    """How many distinct agent runs the provider served (each starts with
+    exactly one message: the task prompt)."""
+    return sum(1 for call in provider.calls if len(call["messages"]) == 1)
 
 
 def test_help_lists_all_commands() -> None:
@@ -316,6 +365,139 @@ def test_curate_accepts_single_server_after_override(tmp_path: Path) -> None:
     servers = _resolve_task_servers(tasks, str(FIXTURES / "mini_server.py"), HttpMode.STATEFUL)
     spec = _single_server_spec(servers, "curate")
     assert "mini_server.py" in spec.label()
+
+
+def test_curate_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.tracing import TraceStore
+
+    monkeypatch.chdir(tmp_path)  # keep the judge cache out of the repo
+    # baseline: rep 1 hits, rep 2 misses; curated: both reps hit
+    agent = _patch_agent_provider(
+        monkeypatch,
+        _agent_turns_hit() + _agent_turns_miss() + _agent_turns_hit() + _agent_turns_hit(),
+    )
+    _patch_optimizer_provider(monkeypatch)
+
+    store_path = tmp_path / "traces.sqlite3"
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--runs",
+            "2",
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(store_path),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 4  # 2 baseline reps + 2 curated reps
+
+    # mean with range on the noisy side, collapsed mean on the stable side
+    assert "Hit-rate: 50% [0%–100%] -> 100%" in result.output
+    assert "groups 'baseline-1'..'-2', 'curated-1'..'-2'" in result.output
+
+    with TraceStore(store_path) as store:
+        groups = {g["run_group"] for g in store.list_groups()}
+    assert groups == {"baseline-1", "baseline-2", "curated-1", "curated-2"}
+
+    report = json.loads((tmp_path / "report" / "report.json").read_text())
+    assert report["before_spread"] == "50% [0%–100%]"
+    assert report["after_spread"] == "100%"
+
+
+def test_curate_single_run_keeps_plain_groups(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.tracing import TraceStore
+
+    monkeypatch.chdir(tmp_path)
+    agent = _patch_agent_provider(monkeypatch, _agent_turns_hit() + _agent_turns_hit())
+    _patch_optimizer_provider(monkeypatch)
+
+    store_path = tmp_path / "traces.sqlite3"
+    # simulate leftovers from an earlier --runs 2 invocation: they must be replaced
+    from whetkit.tracing import TaskRun
+
+    with TraceStore(store_path) as store:
+        store.save_runs([TaskRun(task_id="add-two", server="s", model="m")], run_group="baseline-2")
+
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(store_path),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 2
+    assert "Hit-rate: 100% -> 100%" in result.output
+    with TraceStore(store_path) as store:
+        groups = {g["run_group"] for g in store.list_groups()}
+    assert groups == {"baseline", "curated"}  # stale baseline-2 cleared
+
+
+def test_fix_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.tracing import TraceStore
+
+    monkeypatch.chdir(tmp_path)
+    agent = _patch_agent_provider(
+        monkeypatch,
+        _agent_turns_hit() + _agent_turns_miss() + _agent_turns_hit() + _agent_turns_hit(),
+    )
+    _patch_optimizer_provider(monkeypatch)
+
+    store_path = tmp_path / "traces.sqlite3"
+    result = runner.invoke(
+        app,
+        [
+            "fix",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--runs",
+            "2",
+            "--max-iterations",
+            "1",
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(store_path),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 4  # 2 baseline reps + 2 curated reps
+    assert "Hit-rate: 50% [0%–100%] -> 100%" in result.output
+    with TraceStore(store_path) as store:
+        groups = {g["run_group"] for g in store.list_groups()}
+    assert groups == {"baseline-1", "baseline-2", "fix-1-1", "fix-1-2"}
 
 
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:
