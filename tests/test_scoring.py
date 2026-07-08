@@ -267,3 +267,42 @@ class TestAggregate:
         assert score.tool_hit is True
         assert score.hit is False
         assert summary.judge_pass_rate == 0.0
+
+
+class TestRegressionsReviewTop5:
+    def test_overlapping_alternatives_maximize_matching(self) -> None:
+        # Greedy first-fit would hand 'lookup' to slot 0 and strand 'search'.
+        result = score_tool_match(task([["search", "lookup"], ["lookup"]]), ["lookup", "search"])
+        assert result.matched is True
+        assert result.extra_calls == []
+        assert result.missing_slots == []
+        assert result.recall == 1.0
+
+    def test_overlapping_alternatives_chain(self) -> None:
+        chained = task([["a", "b"], ["b", "c"], ["c"]])
+        assert score_tool_match(chained, ["c", "b", "a"]).matched is True
+        # and a genuinely unsatisfiable set still misses
+        assert score_tool_match(chained, ["c", "c", "c"]).matched is False
+
+    async def test_judge_provider_failure_fails_closed(self) -> None:
+        provider = FakeProvider([])  # raises on any call
+        verdict = await judge_run(task(["a"]), make_run(["a"]), JUDGE, provider)
+        assert verdict.passed is False
+        assert verdict.valid is False
+        assert "Judge call failed" in verdict.rationale
+
+    async def test_truncated_final_answer_is_flagged(self) -> None:
+        run = make_run(["a"])
+        run.turns[-1].stop_reason = "max_tokens"
+        assert run.truncated is True
+        summary = await score_runs([task(["a"])], [run])
+        (score,) = summary.scores
+        assert score.truncated is True
+        assert any("Truncated answers" in line for line in summary.summary_lines())
+
+    async def test_untruncated_run_not_flagged(self) -> None:
+        run = make_run(["a"])
+        run.turns[-1].stop_reason = "end_turn"
+        assert run.truncated is False
+        summary = await score_runs([task(["a"])], [run])
+        assert not any("Truncated answers" in line for line in summary.summary_lines())

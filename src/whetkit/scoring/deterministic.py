@@ -38,15 +38,35 @@ class ToolMatchResult(BaseModel):
 
 
 def _assign_unordered(slots: list[list[str]], called: list[str]) -> list[int | None]:
-    """Greedily assign calls to slots ignoring order. Returns, per call, the
-    slot index it satisfied (or None if it satisfied nothing)."""
-    remaining = set(range(len(slots)))
-    assignment: list[int | None] = []
-    for name in called:
-        hit = next((i for i in sorted(remaining) if name in slots[i]), None)
-        if hit is not None:
-            remaining.discard(hit)
-        assignment.append(hit)
+    """Assign calls to slots ignoring order, maximizing satisfied slots.
+    Returns, per call, the slot index it satisfied (or None).
+
+    This is maximum bipartite matching (Kuhn's augmenting paths), not a
+    greedy pass: with overlapping alternative sets like
+    ``[["search", "lookup"], ["lookup"]]`` and calls ``lookup, search``, a
+    greedy first-fit hands ``lookup`` to slot 0 and strands ``search`` — a
+    false MISS that would also feed phantom failures to the optimizer.
+    Sizes here are tiny (a handful of slots per task), so the O(V·E)
+    augmenting search is effectively free.
+    """
+    call_for_slot: dict[int, int] = {}
+
+    def augment(call_idx: int, visited: set[int]) -> bool:
+        for slot_idx, slot in enumerate(slots):
+            if slot_idx in visited or called[call_idx] not in slot:
+                continue
+            visited.add(slot_idx)
+            if slot_idx not in call_for_slot or augment(call_for_slot[slot_idx], visited):
+                call_for_slot[slot_idx] = call_idx
+                return True
+        return False
+
+    for call_idx in range(len(called)):
+        augment(call_idx, set())
+
+    assignment: list[int | None] = [None] * len(called)
+    for slot_idx, call_idx in call_for_slot.items():
+        assignment[call_idx] = slot_idx
     return assignment
 
 
