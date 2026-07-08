@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -9,6 +10,18 @@ from whetkit.llm import LLMTurn, ToolCall
 from .fakes import FakeProvider, SleepyProvider
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """CLI output normalized for substring asserts: rich renders errors in an
+    ANSI panel on CI (colors, box borders, wrapping) that splits words."""
+    text = _ANSI_RE.sub("", output)
+    text = re.sub(r"[\u2500-\u257f]", " ", text)  # box-drawing chars
+    return " ".join(text.split())
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -208,7 +221,7 @@ def test_judge_flag_rejects_unknown_values(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Traceback" not in result.output
-    assert "--judge must be 'auto', 'on', or 'off'" in result.output
+    assert "--judge must be 'auto', 'on', or 'off'" in plain(result.output)
 
 
 def test_match_mode_rejected_at_parse_time_everywhere(tmp_path: Path) -> None:
@@ -217,7 +230,9 @@ def test_match_mode_rejected_at_parse_time_everywhere(tmp_path: Path) -> None:
         result = runner.invoke(app, [command, "--tasks", tasks, "--match-mode", "sloppy"])
         assert result.exit_code != 0, command
         assert "Traceback" not in result.output, command
-        assert "--match-mode must be one of: 'exact', 'order_tolerant'" in result.output, command
+        assert "--match-mode must be one of: 'exact', 'order_tolerant'" in plain(result.output), (
+            command
+        )
 
 
 def test_judge_skip_hint_names_the_judge_providers_env_var() -> None:
@@ -421,7 +436,7 @@ def test_curate_refuses_multi_server_task_sets(tmp_path: Path, monkeypatch) -> N
     assert "Traceback" not in result.output
     assert "2 different servers" in result.output
     assert "unsupported" in result.output
-    assert "once per server" in result.output
+    assert "once per server" in plain(result.output)
 
 
 def test_fix_refuses_multi_server_task_sets(tmp_path: Path, monkeypatch) -> None:
@@ -683,7 +698,7 @@ def test_task_timeout_must_be_positive(tmp_path: Path) -> None:
     for command in ("run", "curate", "fix"):
         result = runner.invoke(app, [command, "--tasks", tasks, "--task-timeout", "0"])
         assert result.exit_code != 0, command
-        assert "--task-timeout must be positive" in result.output, command
+        assert "--task-timeout must be positive" in plain(result.output), command
 
 
 def test_run_flags_timed_out_tasks_in_summary(tmp_path: Path, monkeypatch) -> None:
