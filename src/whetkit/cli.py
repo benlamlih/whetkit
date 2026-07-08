@@ -757,6 +757,10 @@ def curate(
             for task in task_list:
                 typer.echo(f"running {task.id} ...", err=True)
                 baseline_runs.append(await run_task(task, servers[task.server], config))
+            # Persist immediately: a failure anywhere later (judge, optimizer,
+            # curated eval) must not throw away the paid agent runs.
+            with TraceStore(store_path) as trace_store:
+                trace_store.save_runs(baseline_runs, run_group="baseline", replace=True)
             baseline = await score_runs(
                 task_list,
                 baseline_runs,
@@ -795,6 +799,8 @@ def curate(
                         client_factory=lambda spec: CuratedMCPClient(spec, plan),
                     )
                 )
+            with TraceStore(store_path) as trace_store:
+                trace_store.save_runs(curated_runs, run_group="curated", replace=True)
             curated = await score_runs(
                 task_list,
                 curated_runs,
@@ -806,10 +812,6 @@ def curate(
             )
         finally:
             cache.close()
-
-        with TraceStore(store_path) as trace_store:
-            trace_store.save_runs(baseline_runs, run_group="baseline")
-            trace_store.save_runs(curated_runs, run_group="curated")
 
         from whetkit.report import build_report
 
@@ -917,7 +919,7 @@ def fix(
                 await run_task(task, servers[task.server], config, client_factory=client_factory)
             )
         with TraceStore(store_path) as trace_store:
-            trace_store.save_runs(runs, run_group=group)
+            trace_store.save_runs(runs, run_group=group, replace=True)
         return runs
 
     async def _fix() -> None:
@@ -1043,13 +1045,20 @@ def report(
     use_judge = _judge_enabled(judge, judge_model)
 
     with TraceStore(store_path) as trace_store:
-        before_runs = trace_store.load_runs(before)
-        after_runs = trace_store.load_runs(after)
+        before_runs, before_dropped = trace_store.latest_runs_per_task(before)
+        after_runs, after_dropped = trace_store.latest_runs_per_task(after)
     if not before_runs or not after_runs:
         raise typer.BadParameter(
             f"trace store {store_path} has no runs for groups "
             f"{before!r} and/or {after!r} — run 'whetkit curate' first"
         )
+    for group_name, dropped in ((before, before_dropped), (after, after_dropped)):
+        if dropped:
+            typer.echo(
+                f"warning: group '{group_name}' holds {dropped} older run(s) per task "
+                "from previous invocations — using the most recent run per task",
+                err=True,
+            )
 
     async def _report() -> None:
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")

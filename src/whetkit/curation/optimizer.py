@@ -159,21 +159,31 @@ async def propose_plan(
 
     prompt = build_optimizer_prompt(inventory, tasks, runs, scores)
     parsed = None
+    last_error: Exception | None = None
     for _attempt in range(2):
-        turn = await provider.complete(
-            model=model_id,
-            system=OPTIMIZER_SYSTEM_PROMPT,
-            messages=[ChatMessage(role="user", content=prompt)],
-            tools=[],
-            max_tokens=config.max_tokens,
-        )
+        # A provider failure here must degrade to "no changes", not crash the
+        # curate/fix pipeline after the (expensive) baseline eval already ran.
+        try:
+            turn = await provider.complete(
+                model=model_id,
+                system=OPTIMIZER_SYSTEM_PROMPT,
+                messages=[ChatMessage(role="user", content=prompt)],
+                tools=[],
+                max_tokens=config.max_tokens,
+            )
+        except Exception as exc:
+            last_error = exc
+            continue
         parsed = _parse_overrides(turn.text or "")
         if parsed is not None:
             break
     if parsed is None:
-        return CurationPlan(server=inventory.server), [
-            "optimizer output was not valid JSON after 2 attempts; keeping origin tool set"
-        ]
+        reason = (
+            f"optimizer call failed after 2 attempts ({type(last_error).__name__}: {last_error})"
+            if last_error is not None
+            else "optimizer output was not valid JSON after 2 attempts"
+        )
+        return CurationPlan(server=inventory.server), [f"{reason}; keeping origin tool set"]
 
     notes, overrides = parsed
     plan = CurationPlan(server=inventory.server, notes=notes, overrides=overrides)

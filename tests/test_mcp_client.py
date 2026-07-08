@@ -171,3 +171,47 @@ class TestEnvExpansion:
         )
         with pytest.raises(ValueError, match="UNIT_MISSING"):
             resolve_server_spec(str(spec_file))
+
+
+class _PagedSession:
+    """Stub session: three pages behind nextCursor."""
+
+    def __init__(self) -> None:
+        import mcp.types as t
+
+        def page(names: list[str], nxt: str | None) -> t.ListToolsResult:
+            return t.ListToolsResult(
+                tools=[t.Tool(name=n, inputSchema={"type": "object"}) for n in names],
+                nextCursor=nxt,
+            )
+
+        self._pages = {
+            None: page(["t1", "t2"], "c1"),
+            "c1": page(["t3"], "c2"),
+            "c2": page(["t4"], None),
+        }
+
+    async def list_tools(self, cursor: str | None = None):
+        return self._pages[cursor]
+
+
+async def test_list_tools_follows_pagination() -> None:
+    from whetkit.mcp.client import _list_all_tools
+
+    tools = await _list_all_tools(_PagedSession())
+    assert [t.name for t in tools] == ["t1", "t2", "t3", "t4"]
+
+
+async def test_list_tools_guards_against_cursor_loops() -> None:
+    import mcp.types as t
+
+    from whetkit.mcp.client import _list_all_tools
+
+    class LoopySession:
+        async def list_tools(self, cursor: str | None = None):
+            return t.ListToolsResult(
+                tools=[t.Tool(name="x", inputSchema={"type": "object"})], nextCursor="same"
+            )
+
+    tools = await _list_all_tools(LoopySession())
+    assert len(tools) == 2  # first page + one repeat, then the guard stops it

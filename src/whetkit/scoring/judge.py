@@ -146,21 +146,34 @@ async def judge_run(
     provider = provider or get_provider(provider_name)
 
     verdict: JudgeVerdict | None = None
+    last_error: Exception | None = None
     for _attempt in range(2):
-        turn = await provider.complete(
-            model=model_id,
-            system=JUDGE_SYSTEM_PROMPT,
-            messages=[ChatMessage(role="user", content=build_judge_prompt(task, run))],
-            tools=[],
-            max_tokens=config.max_tokens,
-        )
+        # A judge call failing (rate limit, transient outage) must not blow up
+        # a whole eval batch and throw away paid agent runs — fail closed like
+        # unparseable output does, and never cache the failure.
+        try:
+            turn = await provider.complete(
+                model=model_id,
+                system=JUDGE_SYSTEM_PROMPT,
+                messages=[ChatMessage(role="user", content=build_judge_prompt(task, run))],
+                tools=[],
+                max_tokens=config.max_tokens,
+            )
+        except Exception as exc:
+            last_error = exc
+            continue
         verdict = _parse_verdict(turn.text or "", config.model)
         if verdict is not None:
             break
     if verdict is None:
+        reason = (
+            f"Judge call failed after 2 attempts: {type(last_error).__name__}: {last_error}"
+            if last_error is not None
+            else "Judge output was not valid JSON after 2 attempts."
+        )
         verdict = JudgeVerdict(
             passed=False,
-            rationale="Judge output was not valid JSON after 2 attempts.",
+            rationale=reason,
             judge_model=config.model,
             valid=False,
         )
