@@ -197,6 +197,6 @@ def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
             str(tmp_path / "t.sqlite3"),
         ],
     )
-    assert result.exit_code != 0
+    assert result.exit_code == 1
     assert "reset-cmd failed with exit code 3" in result.output
     assert "Traceback" not in result.output

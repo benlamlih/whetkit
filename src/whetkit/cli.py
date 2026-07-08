@@ -534,9 +534,11 @@ def run(
                     typer.echo(f"reset: {reset_cmd}", err=True)
                     proc = subprocess.run(reset_cmd, shell=True)
                     if proc.returncode != 0:
-                        raise typer.BadParameter(
-                            f"--reset-cmd failed with exit code {proc.returncode}"
+                        typer.echo(
+                            f"error: --reset-cmd failed with exit code {proc.returncode}",
+                            err=True,
                         )
+                        raise typer.Exit(code=1)
                 group_name = group if runs == 1 else f"{group}-{run_index}"
                 task_runs, summary = await _run_once(group_name, cache)
                 summaries.append(summary)
