@@ -617,6 +617,17 @@ def curate(
             help="Completion-token budget per model turn (raise for reasoning models)",
         ),
     ] = 1024,
+    prune_unused: Annotated[
+        bool,
+        typer.Option(
+            "--prune-unused",
+            help=(
+                "Additionally hide every tool the eval never touched — the cost "
+                "play for big servers. Only sound when the tasks cover all the "
+                "workflows the curated view will serve."
+            ),
+        ),
+    ] = False,
     store: Annotated[str | None, typer.Option("--store")] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
@@ -624,6 +635,7 @@ def curate(
     it, and show the before/after hit-rate."""
     from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
     from whetkit.curation.optimizer import OptimizerConfig
+    from whetkit.curation.optimizer import prune_unused as apply_prune_unused
     from whetkit.datasets import load_tasks
     from whetkit.mcp import inspect_server
     from whetkit.runner import RunConfig, run_task
@@ -666,6 +678,9 @@ def curate(
             )
             for warning in warnings:
                 typer.echo(f"warning: {warning}", err=True)
+            if prune_unused:
+                pruned = apply_prune_unused(plan, inventory, task_list, baseline_runs)
+                typer.echo(f"--prune-unused: hid {pruned} untouched tool(s)", err=True)
             save_plan(plan, plan_path)
             typer.echo(f"curation plan written to {plan_path}", err=True)
 
