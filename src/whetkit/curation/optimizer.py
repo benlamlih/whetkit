@@ -228,3 +228,101 @@ def prune_unused(
         )
         added += 1
     return added
+
+
+REVISION_INSTRUCTIONS = """\
+You previously proposed the curation plan below, and it was re-evaluated.
+Revise it: KEEP the changes that worked, FIX or DROP the ones implicated in
+regressions or remaining waste. A rename the agent still misused needs a
+better name or a sharper description; a prune that broke a task must be
+un-hidden. Respond with the SAME JSON shape as before — the FULL revised
+plan, not a delta.
+"""
+
+
+def build_revision_prompt(
+    plan: CurationPlan,
+    inventory: ServerInventory,
+    tasks: list[TaskSpec],
+    baseline_runs: list[TaskRun],
+    baseline_scores: list[TaskScore],
+    curated_runs: list[TaskRun],
+    curated_scores: list[TaskScore],
+) -> str:
+    import yaml
+
+    baseline_by_id = {s.task_id: s for s in baseline_scores}
+    regressed = [
+        s.task_id
+        for s in curated_scores
+        if not s.hit and (b := baseline_by_id.get(s.task_id)) is not None and b.hit
+    ]
+    regression_line = (
+        f"REGRESSIONS your plan caused (fix these first): {', '.join(regressed)}"
+        if regressed
+        else "No regressions — focus on remaining waste (unnecessary calls)."
+    )
+    plan_yaml = yaml.safe_dump(plan.model_dump(exclude_defaults=True), sort_keys=False)
+    return (
+        f"## Tools exposed by the server\n{_inventory_block(inventory)}\n\n"
+        f"## Baseline eval (no plan)\n{_trace_block(tasks, baseline_runs, baseline_scores)}\n\n"
+        f"## Your previous plan\n```yaml\n{plan_yaml}```\n\n"
+        f"## Eval THROUGH your plan\n{_trace_block(tasks, curated_runs, curated_scores)}\n\n"
+        f"{regression_line}\n\nRevise the plan now."
+    )
+
+
+async def propose_revision(
+    plan: CurationPlan,
+    inventory: ServerInventory,
+    tasks: list[TaskSpec],
+    baseline_runs: list[TaskRun],
+    baseline_scores: list[TaskScore],
+    curated_runs: list[TaskRun],
+    curated_scores: list[TaskScore],
+    config: OptimizerConfig | None = None,
+    provider: LLMProvider | None = None,
+) -> tuple[CurationPlan, list[str]]:
+    """One revision round: same parsing/validation as propose_plan, but the
+    model sees its previous plan and what happened through it."""
+    config = config or OptimizerConfig()
+    provider_name, model_id = parse_model(config.model)
+    provider = provider or get_provider(provider_name)
+
+    prompt = build_revision_prompt(
+        plan, inventory, tasks, baseline_runs, baseline_scores, curated_runs, curated_scores
+    )
+    parsed = None
+    for _attempt in range(2):
+        turn = await provider.complete(
+            model=model_id,
+            system=OPTIMIZER_SYSTEM_PROMPT + "\n" + REVISION_INSTRUCTIONS,
+            messages=[ChatMessage(role="user", content=prompt)],
+            tools=[],
+            max_tokens=config.max_tokens,
+        )
+        parsed = _parse_overrides(turn.text or "")
+        if parsed is not None:
+            break
+    if parsed is None:
+        return plan, ["revision output was not valid JSON after 2 attempts; keeping previous plan"]
+
+    notes, overrides = parsed
+    revised = CurationPlan(server=inventory.server, notes=notes, overrides=overrides)
+    origin_names = {t.name for t in inventory.tools}
+    warnings: list[str] = []
+    while problems := revised.validate_against(origin_names):
+        problem = problems[0]
+        name_match = re.search(r"'([^']+)'", problem)
+        offender = name_match.group(1) if name_match else None
+        before = len(revised.overrides)
+        revised.overrides = [
+            o
+            for o in revised.overrides
+            if offender not in (o.original_name, o.new_name, o.presented_name)
+        ]
+        warnings.append(f"dropped unsafe override(s): {problem}")
+        if len(revised.overrides) == before:
+            warnings.append("could not repair revised plan; keeping previous plan")
+            return plan, warnings
+    return revised, warnings
