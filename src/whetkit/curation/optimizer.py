@@ -197,3 +197,34 @@ async def propose_plan(
             plan.overrides = []
             break
     return plan, warnings
+
+
+def prune_unused(
+    plan: CurationPlan,
+    inventory: ServerInventory,
+    tasks: list[TaskSpec],
+    runs: list[TaskRun],
+) -> int:
+    """Hide every tool the eval never touched: not called in any baseline
+    run, not accepted by any task's expected_tools, and not already
+    overridden. The cost play for big servers — only sound when the task
+    set really covers the workflows the curated view will serve, which is
+    why it's opt-in. Returns how many tools were hidden."""
+    used = {name for run in runs for name in run.called_tool_names}
+    for task in tasks:
+        for slot in task.expected_tool_slots:
+            used.update(slot)
+    overridden = {o.original_name for o in plan.overrides}
+    added = 0
+    for tool in inventory.tools:
+        if tool.name in used or tool.name in overridden:
+            continue
+        plan.overrides.append(
+            ToolOverride(
+                original_name=tool.name,
+                hidden=True,
+                reason="Unused by the eval workflows (pruned by --prune-unused).",
+            )
+        )
+        added += 1
+    return added

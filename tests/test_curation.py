@@ -211,3 +211,39 @@ class TestOptimizer:
         )
         assert plan.overrides == []
         assert any("keeping origin tool set" in w for w in warnings)
+
+
+class TestPruneUnused:
+    async def test_hides_only_untouched_tools(self) -> None:
+        from whetkit.curation.optimizer import prune_unused
+        from whetkit.mcp.introspect import ServerInventory, ToolInfo
+
+        inventory = ServerInventory(
+            server="s",
+            tools=[ToolInfo(name=n) for n in ("used_called", "used_expected", "kept", "noise")],
+        )
+        task = TaskSpec(
+            id="t",
+            prompt="p",
+            server="s",
+            expected_tools=[["used_expected"]],
+            success_criteria="c",
+        )
+        run = TaskRun(task_id="t", server="s", model="m")
+        run.turns = []  # called_tool_names -> []
+        plan = CurationPlan(
+            overrides=[ToolOverride(original_name="kept", new_description="Clear.")]
+        )
+        # simulate a call to used_called via a run with one tool call
+        from whetkit.tracing import ToolCallRecord, TurnRecord
+
+        run.turns = [
+            TurnRecord(
+                index=0,
+                tool_calls=[ToolCallRecord(call_id="c", name="used_called", result_text="ok")],
+            )
+        ]
+        added = prune_unused(plan, inventory, [task], [run])
+        assert added == 1
+        hidden = {o.original_name for o in plan.overrides if o.hidden}
+        assert hidden == {"noise"}
