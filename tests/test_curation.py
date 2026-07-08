@@ -247,3 +247,63 @@ class TestPruneUnused:
         assert added == 1
         hidden = {o.original_name for o in plan.overrides if o.hidden}
         assert hidden == {"noise"}
+
+
+class TestRevision:
+    async def test_revision_prompt_carries_plan_and_regressions(self) -> None:
+        from whetkit.curation.optimizer import build_revision_prompt
+        from whetkit.mcp.introspect import ServerInventory, ToolInfo
+        from whetkit.tracing import ToolCallRecord, TurnRecord
+
+        inventory = ServerInventory(server="s", tools=[ToolInfo(name="proc_ord")])
+        task = TaskSpec(
+            id="place-order",
+            prompt="p",
+            server="s",
+            expected_tools=["proc_ord"],
+            success_criteria="c",
+        )
+        good_run = TaskRun(
+            task_id="place-order",
+            server="s",
+            model="m",
+            turns=[
+                TurnRecord(
+                    index=0,
+                    tool_calls=[ToolCallRecord(call_id="c", name="proc_ord", result_text="ok")],
+                )
+            ],
+        )
+        bad_run = TaskRun(task_id="place-order", server="s", model="m")
+        baseline_score = _score(task, good_run)
+        curated_score = _score(task, bad_run)
+        plan = CurationPlan(
+            overrides=[ToolOverride(original_name="proc_ord", new_name="process_order")]
+        )
+        prompt = build_revision_prompt(
+            plan, inventory, [task], [good_run], [baseline_score], [bad_run], [curated_score]
+        )
+        assert "process_order" in prompt  # previous plan visible
+        assert "REGRESSIONS your plan caused" in prompt
+        assert "place-order" in prompt
+
+    async def test_unparseable_revision_keeps_previous_plan(self) -> None:
+        from whetkit.curation.optimizer import propose_revision
+        from whetkit.mcp.introspect import ServerInventory, ToolInfo
+
+        inventory = ServerInventory(server="s", tools=[ToolInfo(name="a")])
+        previous = CurationPlan(overrides=[ToolOverride(original_name="a", hidden=True)])
+        provider = FakeProvider([LLMTurn(text="nope"), LLMTurn(text="still nope")])
+        revised, warnings = await propose_revision(
+            previous,
+            inventory,
+            [],
+            [],
+            [],
+            [],
+            [],
+            OptimizerConfig(model="fake:opt"),
+            provider,
+        )
+        assert revised is previous
+        assert any("keeping previous plan" in w for w in warnings)

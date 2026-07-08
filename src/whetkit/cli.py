@@ -814,6 +814,159 @@ def curate(
 
 
 @app.command()
+def fix(
+    tasks: Annotated[
+        str, typer.Option("--tasks", help="Task YAML file or directory of task files")
+    ],
+    server: Annotated[
+        str | None, typer.Option("--server", help="Override the server every task runs against")
+    ] = None,
+    model: Annotated[
+        str, typer.Option("--model", help="Agent model as provider:model_id")
+    ] = "anthropic:claude-sonnet-5",
+    optimizer_model: Annotated[
+        str, typer.Option("--optimizer-model")
+    ] = "anthropic:claude-sonnet-5",
+    judge: Annotated[str, typer.Option("--judge", help="'auto', 'on', or 'off'")] = "auto",
+    judge_model: Annotated[str, typer.Option("--judge-model")] = "anthropic:claude-sonnet-5",
+    max_iterations: Annotated[
+        int, typer.Option("--max-iterations", help="Propose→eval→revise rounds (≥1)")
+    ] = 3,
+    plan_path: Annotated[
+        str, typer.Option("--plan", help="Where to write the best plan YAML")
+    ] = ".whetkit/curation-plan.yaml",
+    match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
+    max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
+    max_tokens: Annotated[int, typer.Option("--max-tokens")] = 1024,
+    store: Annotated[str | None, typer.Option("--store")] = None,
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Self-correcting curation: propose a plan, eval through it, feed the
+    regressions and remaining waste back to the optimizer, revise — up to
+    --max-iterations — and keep the best plan by measured results."""
+    from functools import partial
+
+    from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
+    from whetkit.curation.optimizer import OptimizerConfig, propose_revision
+    from whetkit.datasets import load_tasks
+    from whetkit.runner import RunConfig, run_task
+    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.tracing import TraceStore, default_store_path
+
+    if max_iterations < 1:
+        raise typer.BadParameter("--max-iterations must be at least 1")
+    task_list = load_tasks(tasks)
+    servers = _resolve_task_servers(task_list, server, http_mode)
+    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    use_judge = _judge_enabled(judge, judge_model)
+    judge_config = JudgeConfig(model=judge_model)
+    mode = MatchMode(match_mode)
+    store_path = store or str(default_store_path())
+    optimizer_config = OptimizerConfig(model=optimizer_model)
+
+    from whetkit.mcp import MCPClient
+
+    async def _eval(group: str, cache, client_factory=MCPClient):
+        runs = []
+        for task in task_list:
+            typer.echo(f"running {task.id} ...", err=True)
+            runs.append(
+                await run_task(task, servers[task.server], config, client_factory=client_factory)
+            )
+        with TraceStore(store_path) as trace_store:
+            trace_store.save_runs(runs, run_group=group)
+        return runs
+
+    async def _fix() -> None:
+        from whetkit.mcp import inspect_server as _inspect
+
+        cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
+        try:
+            typer.echo("== baseline ==", err=True)
+            baseline_runs = await _eval("baseline", cache)
+            baseline = await score_runs(
+                task_list,
+                baseline_runs,
+                mode=mode,
+                judge_config=judge_config,
+                judge_cache=cache,
+                use_judge=use_judge,
+            )
+            inventory = await _inspect(next(iter(servers.values())))
+
+            typer.echo("== proposing plan (iteration 1) ==", err=True)
+            plan, warnings = await propose_plan(
+                inventory, task_list, baseline_runs, baseline.scores, optimizer_config
+            )
+            for w in warnings:
+                typer.echo(f"warning: {w}", err=True)
+
+            def metric(summary):
+                return (summary.hit_rate, -summary.avg_extra_calls, summary.avg_precision)
+
+            best_plan, best_summary = None, None
+            for iteration in range(1, max_iterations + 1):
+                typer.echo(f"== eval through plan (iteration {iteration}) ==", err=True)
+                curated_runs = await _eval(
+                    f"fix-{iteration}",
+                    cache,
+                    client_factory=partial(CuratedMCPClient, plan=plan),
+                )
+                curated = await score_runs(
+                    task_list,
+                    curated_runs,
+                    mode=mode,
+                    judge_config=judge_config,
+                    judge_cache=cache,
+                    use_judge=use_judge,
+                    name_map=plan.rename_map(),
+                )
+                typer.echo(
+                    f"iteration {iteration}: hit {curated.hit_rate:.0%} "
+                    f"(baseline {baseline.hit_rate:.0%}), "
+                    f"extra calls {curated.avg_extra_calls:.1f}/task",
+                    err=True,
+                )
+                if best_summary is None or metric(curated) > metric(best_summary):
+                    best_plan, best_summary = plan, curated
+
+                converged = (
+                    curated.hit_rate >= baseline.hit_rate and curated.avg_extra_calls <= 0.25
+                )
+                if converged or iteration == max_iterations:
+                    if converged:
+                        typer.echo("converged — no regressions, negligible waste", err=True)
+                    break
+
+                typer.echo("== revising plan ==", err=True)
+                plan, warnings = await propose_revision(
+                    plan,
+                    inventory,
+                    task_list,
+                    baseline_runs,
+                    baseline.scores,
+                    curated_runs,
+                    curated.scores,
+                    optimizer_config,
+                )
+                for w in warnings:
+                    typer.echo(f"warning: {w}", err=True)
+        finally:
+            cache.close()
+
+        save_plan(best_plan, plan_path)
+        typer.echo(f"\nbest plan (of {max_iterations} max iterations) -> {plan_path}")
+        typer.echo(
+            f"Hit-rate: {baseline.hit_rate:.0%} -> {best_summary.hit_rate:.0%}   "
+            f"Extra calls: {baseline.avg_extra_calls:.1f} -> "
+            f"{best_summary.avg_extra_calls:.1f}/task"
+        )
+        typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
+
+    asyncio.run(_fix())
+
+
+@app.command()
 def report(
     tasks: Annotated[
         str, typer.Option("--tasks", help="Task YAML file or directory of task files")
