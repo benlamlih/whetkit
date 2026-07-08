@@ -16,6 +16,7 @@ class TaskScore(BaseModel):
     tool_match: ToolMatchResult
     judge: JudgeVerdict | None = None
     tool_errors: int = 0
+    truncated: bool = False
 
     @property
     def tool_hit(self) -> bool:
@@ -91,6 +92,10 @@ class EvalSummary(BaseModel):
     def total_tool_errors(self) -> int:
         return sum(s.tool_errors for s in self.scores)
 
+    @property
+    def truncated_run_count(self) -> int:
+        return sum(s.truncated for s in self.scores)
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"Tasks: {self.task_count}",
@@ -112,6 +117,12 @@ class EvalSummary(BaseModel):
             lines.append(
                 f"⚠ Failed tool calls: {self.total_tool_errors} — agents received "
                 "errors from the server; read the traces before trusting the scores"
+            )
+        if self.truncated_run_count:
+            lines.append(
+                f"⚠ Truncated answers: {self.truncated_run_count}/{self.task_count} — "
+                "the final answer hit the max_tokens ceiling; judge verdicts on these "
+                "reflect the cutoff, not tool selection. Raise --max-tokens"
             )
         return lines
 
@@ -203,6 +214,7 @@ async def score_runs(
                 tool_match=score_tool_match(task, called, mode),
                 judge=verdict,
                 tool_errors=tool_errors,
+                truncated=run.truncated,
             )
         )
     return EvalSummary(scores=scores)

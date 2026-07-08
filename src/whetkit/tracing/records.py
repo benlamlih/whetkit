@@ -63,6 +63,19 @@ class TaskRun(BaseModel):
         return [call.name for turn in self.turns for call in turn.tool_calls]
 
     @property
+    def truncated(self) -> bool:
+        """True when the final answer hit the max_tokens ceiling.
+
+        Such a run "completed", but the judge would be grading half a
+        sentence — a miss that says nothing about tool selection. Derived
+        from the stored stop_reason (anthropic: max_tokens, openai: length)
+        so it is also retroactively correct for previously saved traces.
+        """
+        if self.status != RunStatus.COMPLETED or not self.turns:
+            return False
+        return self.turns[-1].stop_reason in ("max_tokens", "length")
+
+    @property
     def total_usage(self) -> Usage:
         total = Usage()
         for turn in self.turns:
