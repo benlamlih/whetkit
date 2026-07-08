@@ -132,11 +132,20 @@ back to the original world.
 |---|---|
 | `whetkit doctor` | Lint the tool surface: vague descriptions, cryptic names, near-duplicates, context bloat. `--json`; `--fail-on warn` for CI. |
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
-| `whetkit generate` | Draft eval tasks from the inventory; validated, review-before-trust YAML. |
-| `whetkit run` | Agentic eval loop with real tool execution; scored results + traces. `--plan` scores a curated view. |
-| `whetkit curate` | Baseline → LLM-proposed overlay plan → curated eval → before/after report. |
+| `whetkit generate` | Draft eval tasks from the inventory (server-context aware, read-only unless `--allow-writes`); review-before-trust YAML. |
+| `whetkit run` | Agentic eval with real tool execution. `--runs N` for mean±range and flaky-task detection, `--concurrency` for independent tasks, `--reset-cmd` for stateful fixtures, `--plan` to score a curated view, `--summary-json` for machine-readable results (with cost estimates). |
+| `whetkit curate` | Baseline → LLM-proposed overlay plan → curated eval → before/after report. `--prune-unused` for the cost play. |
+| `whetkit fix` | Self-correcting curation: propose → eval → feed regressions back → revise, up to `--max-iterations`; keeps the best plan by measured results. |
+| `whetkit plan-init` | Scaffold a view plan: `--keep a,b`, `--from-tasks tasks/`, `--from-traces traces.sqlite3` — hide everything else. |
+| `whetkit diff` | Compare two `--summary-json` files: metric deltas + per-task PASS/MISS/FLAKY transitions. |
+| `whetkit export` | Share a plan: `--to markdown` (upstream-PR fix table) or `--to json` (gateway overrides). |
 | `whetkit report` | Rebuild the HTML/JSON report from stored traces. |
 | `whetkit overlay` | Serve the curated view as a stdio MCP server. |
+
+Authenticated servers: any string in `server.json` may reference `${ENV_VARS}`
+(e.g. an `Authorization` header) — credentials never live in the file.
+Summaries flag probable task-spec gaps, errored runs, and failed tool calls
+so a bad score always says why.
 
 ## How scoring works
 
