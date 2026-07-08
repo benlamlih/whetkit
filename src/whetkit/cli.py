@@ -24,15 +24,41 @@ def _resolve_server(value: str, http_mode: HttpMode) -> ServerSpec:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _judge_enabled(judge: str, judge_model: str) -> bool:
-    """--judge auto: grade with the LLM judge only when its API key is set."""
-    if judge in ("on", "off"):
-        return judge == "on"
+def _judge_key_var(judge_model: str) -> str | None:
+    """The env var that holds the judge provider's API key."""
     from whetkit.llm import parse_model
 
     provider_name, _ = parse_model(judge_model)
-    key_var = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
+    return {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
+
+
+def _judge_enabled(judge: str, judge_model: str) -> bool:
+    """--judge auto: grade with the LLM judge only when its API key is set."""
+    if judge not in ("auto", "on", "off"):
+        # an unknown value used to silently mean 'auto' — refuse it instead
+        raise typer.BadParameter("--judge must be 'auto', 'on', or 'off'")
+    if judge in ("on", "off"):
+        return judge == "on"
+    key_var = _judge_key_var(judge_model)
     return bool(key_var and os.environ.get(key_var))
+
+
+def _judge_skip_hint(judge_model: str) -> str:
+    """The 'judge skipped' hint, naming the env var for THIS judge's provider."""
+    key_var = _judge_key_var(judge_model) or "the judge provider's API key"
+    return f"(LLM judge skipped: no API key found — set {key_var} or pass --judge on)"
+
+
+def _match_mode(value: str):
+    """Validate --match-mode where options are read: a typo must be a
+    BadParameter, not a ValueError traceback from inside the async body."""
+    from whetkit.scoring import MatchMode
+
+    try:
+        return MatchMode(value)
+    except ValueError as exc:
+        valid = ", ".join(f"'{m.value}'" for m in MatchMode)
+        raise typer.BadParameter(f"--match-mode must be one of: {valid}") from exc
 
 
 def _resolve_task_servers(
@@ -45,6 +71,25 @@ def _resolve_task_servers(
         task.server: _resolve_server(task.server, http_mode)
         for task in {t.server: t for t in tasks}.values()
     }
+
+
+def _single_server_spec(servers: dict[str, ServerSpec], command: str) -> ServerSpec:
+    """The one server a curation command may target.
+
+    curate/fix inspect ONE server and write ONE plan. Silently curating only
+    ``next(iter(servers))`` while the tasks span several servers would grade
+    the plan against runs it never touched — refuse instead, before any
+    provider call spends money.
+    """
+    distinct = {spec.model_dump_json(): spec for spec in servers.values()}
+    if len(distinct) > 1:
+        labels = ", ".join(sorted(spec.label() for spec in distinct.values()))
+        raise typer.BadParameter(
+            f"tasks span {len(distinct)} different servers ({labels}) — curating "
+            f"multiple servers in one plan is unsupported. Run 'whetkit {command}' "
+            "once per server (split the task set, or pass --server to force one)."
+        )
+    return next(iter(servers.values()))
 
 
 def _write_report(report, out_dir: str) -> tuple[str, str]:
@@ -88,6 +133,54 @@ def _summary_payload(group_name: str, summary, task_runs: list) -> dict:
             for score in summary.scores
         ],
     }
+
+
+async def _eval_repeated(
+    task_list: list,
+    servers: dict[str, ServerSpec],
+    config,
+    *,
+    runs: int,
+    base_group: str,
+    store_path: str,
+    client_factory,
+    score_one,
+) -> tuple[list[list], list]:
+    """Run the whole task set ``runs`` times; persist and score each repetition.
+
+    Group names get a ``-1..-N`` suffix when runs > 1, and the whole group
+    family (the base name plus any suffixed variants from earlier
+    invocations) is replaced on the first repetition. Each repetition is
+    persisted before scoring so a failure later in the pipeline (judge,
+    optimizer, curated eval) never throws away paid agent runs. Returns
+    (per-repetition task runs, per-repetition summaries).
+    """
+    from whetkit.runner import run_task
+    from whetkit.tracing import TraceStore
+
+    all_runs: list[list] = []
+    summaries: list = []
+    for rep in range(1, runs + 1):
+        group_name = base_group if runs == 1 else f"{base_group}-{rep}"
+        if runs > 1:
+            typer.echo(f"-- run {rep}/{runs} --", err=True)
+        rep_runs = []
+        for task in task_list:
+            typer.echo(f"running {task.id} ...", err=True)
+            rep_runs.append(
+                await run_task(task, servers[task.server], config, client_factory=client_factory)
+            )
+        with TraceStore(store_path) as trace_store:
+            if rep == 1:
+                trace_store.delete_group_family(base_group)
+            trace_store.save_runs(rep_runs, run_group=group_name)
+        all_runs.append(rep_runs)
+        summaries.append(await score_one(rep_runs))
+    return all_runs, summaries
+
+
+def _group_family_note(base_group: str, runs: int) -> str:
+    return f"'{base_group}-1'..'-{runs}'" if runs > 1 else f"'{base_group}'"
 
 
 def _version_callback(value: bool) -> None:
@@ -393,9 +486,14 @@ def diff(
             raise typer.BadParameter(f"no summary file at {path}")
         docs.append(jsonlib.loads(Path(path).read_text()))
 
-    def mean(doc: dict, key: str) -> float:
+    def mean(doc: dict, key: str) -> float | None:
         values = [r[key] for r in doc["runs"] if r.get(key) is not None]
-        return sum(values) / len(values) if values else 0.0
+        return sum(values) / len(values) if values else None
+
+    def cell(value: float | None, fmt: str) -> str:
+        # a metric absent from one file (e.g. judging was off) must render
+        # as "—", not fake a "0%" measurement that never happened
+        return "—" if value is None else fmt.format(value)
 
     typer.echo(f"{'metric':<28} {'before':>10} {'after':>10}")
     for label, key, fmt in (
@@ -407,7 +505,7 @@ def diff(
         ("Tokens in (per run)", "tokens_in", "{:.0f}"),
     ):
         b, a = mean(docs[0], key), mean(docs[1], key)
-        typer.echo(f"{label:<28} {fmt.format(b):>10} {fmt.format(a):>10}")
+        typer.echo(f"{label:<28} {cell(b, fmt):>10} {cell(a, fmt):>10}")
 
     def outcomes(doc: dict) -> dict[str, list[bool]]:
         per_task: dict[str, list[bool]] = {}
@@ -488,6 +586,16 @@ def run(
             ),
         ),
     ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help=(
+                "Per-task wall-clock budget in seconds (provider turns plus tool "
+                "calls); an expired task is flagged as timed out, not hung"
+            ),
+        ),
+    ] = 120.0,
     store: Annotated[
         str | None,
         typer.Option("--store", help="Trace SQLite path (default ./.whetkit/traces.sqlite3)"),
@@ -532,17 +640,22 @@ def run(
     """Run eval tasks against an MCP server and print scored results."""
     from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig, run_task
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, MultiRunSummary, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import TraceStore, default_store_path, write_jsonl
 
     if runs < 1:
         raise typer.BadParameter("--runs must be at least 1")
     if concurrency < 1:
         raise typer.BadParameter("--concurrency must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     store_path = store or str(default_store_path())
 
@@ -560,6 +673,17 @@ def run(
         curation_plan = load_plan(plan)
         client_factory = partial(CuratedMCPClient, plan=curation_plan)
         name_map = curation_plan.rename_map()
+        # Validate the plan against every origin's live tool list before
+        # spending on runs: unknown targets or presented-name collisions
+        # would silently eval a broken curated view.
+        distinct_specs = {spec.model_dump_json(): spec for spec in servers.values()}
+        for origin_spec in distinct_specs.values():
+            origin_names = {t.name for t in asyncio.run(inspect_server(origin_spec)).tools}
+            if problems := curation_plan.validate_against(origin_names):
+                raise typer.BadParameter(
+                    f"curation plan {plan} is not valid for {origin_spec.label()}: "
+                    + "; ".join(problems)
+                )
 
     async def _run_once(group_name: str, cache: JudgeCache):
         semaphore = asyncio.Semaphore(concurrency)
@@ -579,7 +703,7 @@ def run(
         summary = await score_runs(
             task_list,
             task_runs,
-            mode=MatchMode(match_mode),
+            mode=mode,
             judge_config=JudgeConfig(model=judge_model),
             judge_cache=cache,
             use_judge=use_judge,
@@ -653,9 +777,7 @@ def run(
             for line in multi.summary_lines():
                 typer.echo(line)
         if judge == "auto" and not use_judge:
-            typer.echo(
-                "(LLM judge skipped: no API key found — set ANTHROPIC_API_KEY or pass --judge on)"
-            )
+            typer.echo(_judge_skip_hint(judge_model))
         suffix = f" (groups '{group}-1'..'-{runs}')" if runs > 1 else f" (group '{group}')"
         typer.echo(f"Traces saved to {store_path}{suffix}")
 
@@ -672,7 +794,7 @@ def run(
             if runs > 1:
                 document["aggregate"] = {
                     "n": multi.n,
-                    "hit_rate_mean": sum(s.hit_rate for s in summaries) / len(summaries),
+                    "hit_rate_mean": multi.mean_hit_rate,
                     "hit_rate_min": min(s.hit_rate for s in summaries),
                     "hit_rate_max": max(s.hit_rate for s in summaries),
                     "flaky_tasks": multi.flaky_tasks(),
@@ -716,6 +838,26 @@ def curate(
             help="Completion-token budget per model turn (raise for reasoning models)",
         ),
     ] = 1024,
+    runs: Annotated[
+        int,
+        typer.Option(
+            "--runs",
+            help=(
+                "Repeat the baseline and curated evals N times and report the "
+                "mean hit-rate plus range — single runs are noise. The "
+                "optimizer's proposal is built from the FIRST baseline run's "
+                "traces; the report's per-task detail shows the last run. "
+                "Trace groups get a -1..-N suffix."
+            ),
+        ),
+    ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help="Per-task wall-clock budget in seconds (provider turns plus tool calls)",
+        ),
+    ] = 120.0,
     prune_unused: Annotated[
         bool,
         typer.Option(
@@ -736,84 +878,95 @@ def curate(
     from whetkit.curation.optimizer import OptimizerConfig
     from whetkit.curation.optimizer import prune_unused as apply_prune_unused
     from whetkit.datasets import load_tasks
-    from whetkit.mcp import inspect_server
-    from whetkit.runner import RunConfig, run_task
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
-    from whetkit.tracing import TraceStore, default_store_path
+    from whetkit.mcp import MCPClient, inspect_server
+    from whetkit.runner import RunConfig
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
+    from whetkit.tracing import default_store_path
 
+    if runs < 1:
+        raise typer.BadParameter("--runs must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    curation_spec = _single_server_spec(servers, "curate")
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
-    mode = MatchMode(match_mode)
     store_path = store or str(default_store_path())
 
     async def _curate() -> None:
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
-        try:
-            typer.echo("== baseline eval ==", err=True)
-            baseline_runs = []
-            for task in task_list:
-                typer.echo(f"running {task.id} ...", err=True)
-                baseline_runs.append(await run_task(task, servers[task.server], config))
-            # Persist immediately: a failure anywhere later (judge, optimizer,
-            # curated eval) must not throw away the paid agent runs.
-            with TraceStore(store_path) as trace_store:
-                trace_store.save_runs(baseline_runs, run_group="baseline", replace=True)
-            baseline = await score_runs(
+
+        async def _score(task_runs, name_map=None):
+            return await score_runs(
                 task_list,
-                baseline_runs,
+                task_runs,
                 mode=mode,
                 judge_config=judge_config,
                 judge_cache=cache,
                 use_judge=use_judge,
+                name_map=name_map,
+            )
+
+        try:
+            typer.echo("== baseline eval ==", err=True)
+            baseline_all, baseline_summaries = await _eval_repeated(
+                task_list,
+                servers,
+                config,
+                runs=runs,
+                base_group="baseline",
+                store_path=store_path,
+                client_factory=MCPClient,
+                score_one=_score,
             )
 
             typer.echo("== proposing curation plan ==", err=True)
-            inventory = await inspect_server(next(iter(servers.values())))
+            inventory = await inspect_server(curation_spec)
+            # The proposal is built from the FIRST baseline run's traces (see
+            # --runs help); further repetitions only measure variance.
             plan, warnings = await propose_plan(
                 inventory,
                 task_list,
-                baseline_runs,
-                baseline.scores,
+                baseline_all[0],
+                baseline_summaries[0].scores,
                 OptimizerConfig(model=optimizer_model),
             )
             for warning in warnings:
                 typer.echo(f"warning: {warning}", err=True)
             if prune_unused:
-                pruned = apply_prune_unused(plan, inventory, task_list, baseline_runs)
+                every_baseline_run = [r for rep in baseline_all for r in rep]
+                pruned = apply_prune_unused(plan, inventory, task_list, every_baseline_run)
                 typer.echo(f"--prune-unused: hid {pruned} untouched tool(s)", err=True)
             save_plan(plan, plan_path)
             typer.echo(f"curation plan written to {plan_path}", err=True)
 
             typer.echo("== curated eval (through overlay) ==", err=True)
-            curated_runs = []
-            for task in task_list:
-                typer.echo(f"running {task.id} ...", err=True)
-                curated_runs.append(
-                    await run_task(
-                        task,
-                        servers[task.server],
-                        config,
-                        client_factory=lambda spec: CuratedMCPClient(spec, plan),
-                    )
-                )
-            with TraceStore(store_path) as trace_store:
-                trace_store.save_runs(curated_runs, run_group="curated", replace=True)
-            curated = await score_runs(
+            curated_all, curated_summaries = await _eval_repeated(
                 task_list,
-                curated_runs,
-                mode=mode,
-                judge_config=judge_config,
-                judge_cache=cache,
-                use_judge=use_judge,
-                name_map=plan.rename_map(),
+                servers,
+                config,
+                runs=runs,
+                base_group="curated",
+                store_path=store_path,
+                client_factory=lambda spec: CuratedMCPClient(spec, plan),
+                score_one=lambda task_runs: _score(task_runs, name_map=plan.rename_map()),
             )
         finally:
             cache.close()
 
         from whetkit.report import build_report
+
+        baseline_multi = MultiRunSummary(summaries=baseline_summaries)
+        curated_multi = MultiRunSummary(summaries=curated_summaries)
+        # Per-task detail (report + table) shows the LAST repetition; the
+        # headline mean/range strings carry the cross-run picture.
+        baseline_runs, baseline = baseline_all[-1], baseline_summaries[-1]
+        curated_runs, curated = curated_all[-1], curated_summaries[-1]
 
         origin_names = {t.name for t in inventory.tools}
         report = build_report(
@@ -824,13 +977,17 @@ def curate(
             curated,
             plan,
             model=model,
-            server=next(iter(servers.values())).label(),
+            server=curation_spec.label(),
             tools_before=inventory.tool_count,
             tools_after=len(plan.presented_to_original(origin_names)),
+            before_spread=baseline_multi.hit_rate_spread() if runs > 1 else None,
+            after_spread=curated_multi.hit_rate_spread() if runs > 1 else None,
         )
         html_path, json_path = _write_report(report, report_dir)
 
         typer.echo("\n== before/after ==")
+        if runs > 1:
+            typer.echo(f"(per-task view shows the last of {runs} runs)")
         typer.echo(f"{'task':<28} {'before':<8} {'after':<8}")
         curated_by_id = {s.task_id: s for s in curated.scores}
         for score in baseline.scores:
@@ -842,9 +999,12 @@ def curate(
             )
         typer.echo("")
         typer.echo(
-            f"Hit-rate: {baseline.hit_rate:.0%} -> {curated.hit_rate:.0%}   "
-            f"Tool hit-rate: {baseline.tool_hit_rate:.0%} -> {curated.tool_hit_rate:.0%}   "
-            f"Precision: {baseline.avg_precision:.0%} -> {curated.avg_precision:.0%}"
+            f"Hit-rate: {baseline_multi.hit_rate_spread()} -> "
+            f"{curated_multi.hit_rate_spread()}   "
+            f"Tool hit-rate: {baseline_multi.tool_hit_rate_spread()} -> "
+            f"{curated_multi.tool_hit_rate_spread()}   "
+            f"Precision: {baseline_multi.avg_precision_spread()} -> "
+            f"{curated_multi.avg_precision_spread()}"
         )
         tok_before = (report.before.input_tokens + report.before.output_tokens) // len(task_list)
         tok_after = (report.after.input_tokens + report.after.output_tokens) // len(task_list)
@@ -852,7 +1012,10 @@ def curate(
             f"Tools: {report.tools_before} -> {report.tools_after}   "
             f"Tokens/task: {tok_before} -> {tok_after}"
         )
-        typer.echo(f"Traces saved to {store_path} (groups 'baseline', 'curated')")
+        typer.echo(
+            f"Traces saved to {store_path} (groups {_group_family_note('baseline', runs)}, "
+            f"{_group_family_note('curated', runs)})"
+        )
         typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
     asyncio.run(_curate())
@@ -883,6 +1046,25 @@ def fix(
     match_mode: Annotated[str, typer.Option("--match-mode")] = "order_tolerant",
     max_turns: Annotated[int, typer.Option("--max-turns")] = 10,
     max_tokens: Annotated[int, typer.Option("--max-tokens")] = 1024,
+    runs: Annotated[
+        int,
+        typer.Option(
+            "--runs",
+            help=(
+                "Repeat the baseline and each iteration's curated eval N times; "
+                "iteration decisions and the final report use the mean plus "
+                "range. The optimizer sees the FIRST repetition's traces. "
+                "Trace groups get a -1..-N suffix."
+            ),
+        ),
+    ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help="Per-task wall-clock budget in seconds (provider turns plus tool calls)",
+        ),
+    ] = 120.0,
     store: Annotated[str | None, typer.Option("--store")] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
@@ -894,89 +1076,100 @@ def fix(
     from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
     from whetkit.curation.optimizer import OptimizerConfig, propose_revision
     from whetkit.datasets import load_tasks
-    from whetkit.runner import RunConfig, run_task
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
-    from whetkit.tracing import TraceStore, default_store_path
+    from whetkit.runner import RunConfig
+    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
+    from whetkit.tracing import default_store_path
 
     if max_iterations < 1:
         raise typer.BadParameter("--max-iterations must be at least 1")
+    if runs < 1:
+        raise typer.BadParameter("--runs must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    curation_spec = _single_server_spec(servers, "fix")
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
-    mode = MatchMode(match_mode)
     store_path = store or str(default_store_path())
     optimizer_config = OptimizerConfig(model=optimizer_model)
 
     from whetkit.mcp import MCPClient
 
-    async def _eval(group: str, cache, client_factory=MCPClient):
-        runs = []
-        for task in task_list:
-            typer.echo(f"running {task.id} ...", err=True)
-            runs.append(
-                await run_task(task, servers[task.server], config, client_factory=client_factory)
-            )
-        with TraceStore(store_path) as trace_store:
-            trace_store.save_runs(runs, run_group=group, replace=True)
-        return runs
-
     async def _fix() -> None:
         from whetkit.mcp import inspect_server as _inspect
 
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
-        try:
-            typer.echo("== baseline ==", err=True)
-            baseline_runs = await _eval("baseline", cache)
-            baseline = await score_runs(
+
+        async def _score(task_runs, name_map=None):
+            return await score_runs(
                 task_list,
-                baseline_runs,
+                task_runs,
                 mode=mode,
                 judge_config=judge_config,
                 judge_cache=cache,
                 use_judge=use_judge,
+                name_map=name_map,
             )
-            inventory = await _inspect(next(iter(servers.values())))
+
+        async def _eval(group: str, client_factory=MCPClient, name_map=None):
+            return await _eval_repeated(
+                task_list,
+                servers,
+                config,
+                runs=runs,
+                base_group=group,
+                store_path=store_path,
+                client_factory=client_factory,
+                score_one=lambda task_runs: _score(task_runs, name_map=name_map),
+            )
+
+        try:
+            typer.echo("== baseline ==", err=True)
+            baseline_all, baseline_summaries = await _eval("baseline")
+            baseline_multi = MultiRunSummary(summaries=baseline_summaries)
+            inventory = await _inspect(curation_spec)
 
             typer.echo("== proposing plan (iteration 1) ==", err=True)
+            # The optimizer sees the FIRST repetition's traces (see --runs help).
             plan, warnings = await propose_plan(
-                inventory, task_list, baseline_runs, baseline.scores, optimizer_config
+                inventory,
+                task_list,
+                baseline_all[0],
+                baseline_summaries[0].scores,
+                optimizer_config,
             )
             for w in warnings:
                 typer.echo(f"warning: {w}", err=True)
 
-            def metric(summary):
-                return (summary.hit_rate, -summary.avg_extra_calls, summary.avg_precision)
+            def metric(multi):
+                return (multi.mean_hit_rate, -multi.mean_avg_extra_calls, multi.mean_avg_precision)
 
-            best_plan, best_summary = None, None
+            best_plan, best_multi = None, None
             for iteration in range(1, max_iterations + 1):
                 typer.echo(f"== eval through plan (iteration {iteration}) ==", err=True)
-                curated_runs = await _eval(
+                curated_all, curated_summaries = await _eval(
                     f"fix-{iteration}",
-                    cache,
                     client_factory=partial(CuratedMCPClient, plan=plan),
-                )
-                curated = await score_runs(
-                    task_list,
-                    curated_runs,
-                    mode=mode,
-                    judge_config=judge_config,
-                    judge_cache=cache,
-                    use_judge=use_judge,
                     name_map=plan.rename_map(),
                 )
+                curated_multi = MultiRunSummary(summaries=curated_summaries)
                 typer.echo(
-                    f"iteration {iteration}: hit {curated.hit_rate:.0%} "
-                    f"(baseline {baseline.hit_rate:.0%}), "
-                    f"extra calls {curated.avg_extra_calls:.1f}/task",
+                    f"iteration {iteration}: hit {curated_multi.hit_rate_spread()} "
+                    f"(baseline {baseline_multi.hit_rate_spread()}), "
+                    f"extra calls {curated_multi.mean_avg_extra_calls:.1f}/task",
                     err=True,
                 )
-                if best_summary is None or metric(curated) > metric(best_summary):
-                    best_plan, best_summary = plan, curated
+                if best_multi is None or metric(curated_multi) > metric(best_multi):
+                    best_plan, best_multi = plan, curated_multi
 
                 converged = (
-                    curated.hit_rate >= baseline.hit_rate and curated.avg_extra_calls <= 0.25
+                    curated_multi.mean_hit_rate >= baseline_multi.mean_hit_rate
+                    and curated_multi.mean_avg_extra_calls <= 0.25
                 )
                 if converged or iteration == max_iterations:
                     if converged:
@@ -988,10 +1181,10 @@ def fix(
                     plan,
                     inventory,
                     task_list,
-                    baseline_runs,
-                    baseline.scores,
-                    curated_runs,
-                    curated.scores,
+                    baseline_all[0],
+                    baseline_summaries[0].scores,
+                    curated_all[0],
+                    curated_summaries[0].scores,
                     optimizer_config,
                 )
                 for w in warnings:
@@ -1002,9 +1195,9 @@ def fix(
         save_plan(best_plan, plan_path)
         typer.echo(f"\nbest plan (of {max_iterations} max iterations) -> {plan_path}")
         typer.echo(
-            f"Hit-rate: {baseline.hit_rate:.0%} -> {best_summary.hit_rate:.0%}   "
-            f"Extra calls: {baseline.avg_extra_calls:.1f} -> "
-            f"{best_summary.avg_extra_calls:.1f}/task"
+            f"Hit-rate: {baseline_multi.hit_rate_spread()} -> {best_multi.hit_rate_spread()}   "
+            f"Extra calls: {baseline_multi.mean_avg_extra_calls:.1f} -> "
+            f"{best_multi.mean_avg_extra_calls:.1f}/task"
         )
         typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
 
@@ -1032,9 +1225,10 @@ def report(
     from whetkit.curation import load_plan
     from whetkit.datasets import load_tasks
     from whetkit.report import build_report
-    from whetkit.scoring import JudgeCache, JudgeConfig, MatchMode, score_runs
+    from whetkit.scoring import JudgeCache, JudgeConfig, score_runs
     from whetkit.tracing import TraceStore, default_store_path
 
+    mode = _match_mode(match_mode)
     task_list = load_tasks(tasks)
     if not Path(plan).is_file():
         raise typer.BadParameter(
@@ -1064,7 +1258,6 @@ def report(
         cache = JudgeCache(default_store_path().parent / "judge_cache.sqlite3")
         try:
             judge_config = JudgeConfig(model=judge_model)
-            mode = MatchMode(match_mode)
             before_summary = await score_runs(
                 task_list,
                 before_runs,
@@ -1116,9 +1309,14 @@ def overlay(
     """Serve the curated view of a server as a stdio MCP server (reversible:
     the origin is never modified)."""
     from whetkit.curation import load_plan, serve_overlay
+    from whetkit.curation.overlay import InvalidPlanError
 
     origin = _resolve_server(server, http_mode)
-    asyncio.run(serve_overlay(origin, load_plan(plan)))
+    try:
+        asyncio.run(serve_overlay(origin, load_plan(plan)))
+    except InvalidPlanError as exc:
+        typer.echo(f"error: curation plan is not valid for this origin: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ are returned to the model as error results, not raised — an agent that
 recovers from a bad call can still succeed.
 """
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -34,6 +35,9 @@ class RunConfig(BaseModel):
     max_turns: int = 10
     max_tokens: int = 1024
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
+    # Wall-clock budget for one task's whole agent loop (provider turns plus
+    # tool calls). A hung server or provider must fail one task, not the batch.
+    task_timeout_s: float = 120.0
 
 
 def _render_tool_result(result: types.CallToolResult) -> str:
@@ -76,66 +80,78 @@ async def run_task(
 
     try:
         async with client_factory(server) as client:
-            mcp_tools = await client.list_tools()
-            tool_defs = [
-                ToolDef(
-                    name=t.name,
-                    description=t.description or "",
-                    input_schema=t.inputSchema or {"type": "object"},
-                )
-                for t in mcp_tools
-            ]
-
-            for turn_index in range(config.max_turns):
-                started = time.perf_counter()
-                turn = await provider.complete(
-                    model=model_id,
-                    system=config.system_prompt,
-                    messages=messages,
-                    tools=tool_defs,
-                    max_tokens=config.max_tokens,
-                )
-                turn_latency = (time.perf_counter() - started) * 1000
-
-                record = TurnRecord(
-                    index=turn_index,
-                    assistant_text=turn.text,
-                    usage=turn.usage,
-                    latency_ms=turn_latency,
-                    stop_reason=turn.stop_reason,
-                )
-                run.turns.append(record)
-
-                if not turn.tool_calls:
-                    run.final_text = turn.text
-                    run.status = RunStatus.COMPLETED
-                    break
-
-                messages.append(
-                    ChatMessage(role="assistant", content=turn.text, tool_calls=turn.tool_calls)
-                )
-                results: list[ToolResult] = []
-                for call in turn.tool_calls:
-                    arguments = call.arguments if isinstance(call.arguments, dict) else {}
-                    call_started = time.perf_counter()
-                    result_text, is_error = await _execute_call(client, call.name, arguments)
-                    call_latency = (time.perf_counter() - call_started) * 1000
-                    record.tool_calls.append(
-                        ToolCallRecord(
-                            call_id=call.id,
-                            name=call.name,
-                            arguments=arguments,
-                            result_text=result_text,
-                            is_error=is_error,
-                            latency_ms=call_latency,
+            # The timeout is handled INSIDE the client context so the client's
+            # __aexit__ runs on an un-cancelled task and the transport (stdio
+            # subprocess / HTTP session) still shuts down cleanly.
+            try:
+                async with asyncio.timeout(config.task_timeout_s):
+                    mcp_tools = await client.list_tools()
+                    tool_defs = [
+                        ToolDef(
+                            name=t.name,
+                            description=t.description or "",
+                            input_schema=t.inputSchema or {"type": "object"},
                         )
-                    )
-                    results.append(
-                        ToolResult(call_id=call.id, content=result_text, is_error=is_error)
-                    )
-                messages.append(ChatMessage(role="user", tool_results=results))
-            else:
-                run.status = RunStatus.MAX_TURNS
+                        for t in mcp_tools
+                    ]
+
+                    for turn_index in range(config.max_turns):
+                        started = time.perf_counter()
+                        turn = await provider.complete(
+                            model=model_id,
+                            system=config.system_prompt,
+                            messages=messages,
+                            tools=tool_defs,
+                            max_tokens=config.max_tokens,
+                        )
+                        turn_latency = (time.perf_counter() - started) * 1000
+
+                        record = TurnRecord(
+                            index=turn_index,
+                            assistant_text=turn.text,
+                            usage=turn.usage,
+                            latency_ms=turn_latency,
+                            stop_reason=turn.stop_reason,
+                        )
+                        run.turns.append(record)
+
+                        if not turn.tool_calls:
+                            run.final_text = turn.text
+                            run.status = RunStatus.COMPLETED
+                            break
+
+                        messages.append(
+                            ChatMessage(
+                                role="assistant", content=turn.text, tool_calls=turn.tool_calls
+                            )
+                        )
+                        results: list[ToolResult] = []
+                        for call in turn.tool_calls:
+                            arguments = call.arguments if isinstance(call.arguments, dict) else {}
+                            call_started = time.perf_counter()
+                            result_text, is_error = await _execute_call(
+                                client, call.name, arguments
+                            )
+                            call_latency = (time.perf_counter() - call_started) * 1000
+                            record.tool_calls.append(
+                                ToolCallRecord(
+                                    call_id=call.id,
+                                    name=call.name,
+                                    arguments=arguments,
+                                    result_text=result_text,
+                                    is_error=is_error,
+                                    latency_ms=call_latency,
+                                )
+                            )
+                            results.append(
+                                ToolResult(call_id=call.id, content=result_text, is_error=is_error)
+                            )
+                        messages.append(ChatMessage(role="user", tool_results=results))
+                    else:
+                        run.status = RunStatus.MAX_TURNS
+            except TimeoutError:
+                run.status = RunStatus.TIMEOUT
+                run.error = f"task exceeded --task-timeout after {config.task_timeout_s:g}s"
     except Exception as exc:
         run.status = RunStatus.ERROR
         run.error = f"{type(exc).__name__}: {exc}"

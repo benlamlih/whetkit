@@ -115,6 +115,19 @@ def test_save_runs_replace_clears_group(tmp_path: Path) -> None:
         assert [r.task_id for r in store.load_runs("other")] == ["stale"]  # untouched
 
 
+def test_delete_group_family_clears_base_and_suffixed_groups(tmp_path: Path) -> None:
+    with TraceStore(tmp_path / "traces.sqlite3") as store:
+        store.save_runs([make_run("t1")], run_group="baseline")
+        store.save_runs([make_run("t1")], run_group="baseline-1")
+        store.save_runs([make_run("t1")], run_group="baseline-2")
+        store.save_runs([make_run("t1")], run_group="curated")
+
+        deleted = store.delete_group_family("baseline")
+        assert deleted == 3
+        groups = {g["run_group"] for g in store.list_groups()}
+        assert groups == {"curated"}  # unrelated group untouched
+
+
 def test_latest_runs_per_task_dedupes_and_counts(tmp_path: Path) -> None:
     with TraceStore(tmp_path / "traces.sqlite3") as store:
         store.save_runs([make_run("t1"), make_run("t2")], run_group="g")

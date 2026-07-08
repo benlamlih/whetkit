@@ -89,6 +89,10 @@ class EvalSummary(BaseModel):
         return sum(s.run_status == RunStatus.ERROR for s in self.scores)
 
     @property
+    def timeout_run_count(self) -> int:
+        return sum(s.run_status == RunStatus.TIMEOUT for s in self.scores)
+
+    @property
     def total_tool_errors(self) -> int:
         return sum(s.tool_errors for s in self.scores)
 
@@ -112,6 +116,15 @@ class EvalSummary(BaseModel):
                 f"⚠ Errored runs: {self.error_run_count}/{self.task_count} — the agent "
                 "loop failed (connection/provider); scores below reflect failures, "
                 "not tool selection"
+            )
+        if self.timeout_run_count:
+            # Like errored runs these are misses unless the right tools were
+            # already called before the cutoff — but they deserve their own
+            # line, because the fix (raise --task-timeout) is different.
+            lines.append(
+                f"⚠ Timed-out runs: {self.timeout_run_count}/{self.task_count} — the "
+                "agent loop was cut off by --task-timeout; scores for these reflect "
+                "the cutoff, not tool selection. Raise --task-timeout"
             )
         if self.total_tool_errors:
             lines.append(
@@ -146,18 +159,39 @@ class MultiRunSummary(BaseModel):
             return f"{mean:.0%}"
         return f"{mean:.0%} [{low:.0%}–{high:.0%}]"
 
+    @property
+    def mean_hit_rate(self) -> float:
+        return sum(s.hit_rate for s in self.summaries) / len(self.summaries)
+
+    @property
+    def mean_avg_precision(self) -> float:
+        return sum(s.avg_precision for s in self.summaries) / len(self.summaries)
+
+    @property
+    def mean_avg_extra_calls(self) -> float:
+        return sum(s.avg_extra_calls for s in self.summaries) / len(self.summaries)
+
+    def hit_rate_spread(self) -> str:
+        """Display string: mean hit-rate plus [min–max] when runs disagree."""
+        return self._spread([s.hit_rate for s in self.summaries])
+
+    def tool_hit_rate_spread(self) -> str:
+        return self._spread([s.tool_hit_rate for s in self.summaries])
+
+    def avg_precision_spread(self) -> str:
+        return self._spread([s.avg_precision for s in self.summaries])
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"Runs: {self.n} × {self.summaries[0].task_count} task(s)",
-            f"Hit-rate: {self._spread([s.hit_rate for s in self.summaries])}",
-            f"Tool-selection hit-rate: {self._spread([s.tool_hit_rate for s in self.summaries])}",
-            f"Tool precision (avg): {self._spread([s.avg_precision for s in self.summaries])}",
+            f"Hit-rate: {self.hit_rate_spread()}",
+            f"Tool-selection hit-rate: {self.tool_hit_rate_spread()}",
+            f"Tool precision (avg): {self.avg_precision_spread()}",
         ]
         judged = [s.judge_pass_rate for s in self.summaries if s.judge_pass_rate is not None]
         if judged:
             lines.insert(2, f"Judge pass-rate: {self._spread(judged)}")
-        extras = [s.avg_extra_calls for s in self.summaries]
-        lines.append(f"Unnecessary calls (avg): {sum(extras) / len(extras):.1f}/task")
+        lines.append(f"Unnecessary calls (avg): {self.mean_avg_extra_calls:.1f}/task")
         flaky = self.flaky_tasks()
         if flaky:
             lines.append(f"Flaky tasks (hit in some runs, missed in others): {', '.join(flaky)}")

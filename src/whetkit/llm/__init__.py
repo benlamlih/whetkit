@@ -8,6 +8,7 @@ from whetkit.llm.base import (
     ToolDef,
     ToolResult,
     Usage,
+    sanitize_untrusted,
 )
 from whetkit.llm.registry import get_provider, parse_model
 
@@ -21,4 +22,5 @@ __all__ = [
     "Usage",
     "get_provider",
     "parse_model",
+    "sanitize_untrusted",
 ]

@@ -122,6 +122,10 @@ class ComparisonReport(BaseModel):
     tools_after: int | None = None
     before: Totals
     after: Totals
+    # Display strings ("58% [40%–60%]") when the eval was repeated (--runs N):
+    # the headline Totals hold the last repetition; these carry mean and range.
+    before_spread: str | None = None
+    after_spread: str | None = None
     tasks: list[TaskComparison]
     plan: CurationPlan
     action_impacts: list[ActionImpact]
@@ -193,6 +197,8 @@ def build_report(
     server: str = "",
     tools_before: int | None = None,
     tools_after: int | None = None,
+    before_spread: str | None = None,
+    after_spread: str | None = None,
 ) -> ComparisonReport:
     baseline_runs_by_id = {r.task_id: r for r in baseline_runs}
     curated_runs_by_id = {r.task_id: r for r in curated_runs}
@@ -222,6 +228,8 @@ def build_report(
         tools_after=tools_after,
         before=Totals.from_summary(baseline_summary, baseline_runs),
         after=Totals.from_summary(curated_summary, curated_runs),
+        before_spread=before_spread,
+        after_spread=after_spread,
         tasks=comparisons,
         plan=plan,
         action_impacts=_attribute_actions(plan, comparisons, tasks),
