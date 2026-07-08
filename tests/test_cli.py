@@ -229,3 +229,40 @@ def test_plan_init_requires_a_keep_set() -> None:
     result = runner.invoke(app, ["plan-init", "--server", str(FIXTURES / "mini_server.py")])
     assert result.exit_code != 0
     assert "nothing to keep" in result.output
+
+
+def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:
+    from whetkit.curation import load_plan
+    from whetkit.tracing import TaskRun, ToolCallRecord, TraceStore, TurnRecord
+
+    store_path = tmp_path / "traces.sqlite3"
+    run = TaskRun(
+        task_id="t",
+        server="s",
+        model="m",
+        turns=[
+            TurnRecord(
+                index=0,
+                tool_calls=[ToolCallRecord(call_id="c", name="add", result_text="ok")],
+            )
+        ],
+    )
+    with TraceStore(store_path) as store:
+        store.save_runs([run], run_group="baseline")
+
+    out = tmp_path / "plan.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "plan-init",
+            "--server",
+            str(FIXTURES / "mini_server.py"),
+            "--from-traces",
+            str(store_path),
+            "--out",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0
+    hidden = {o.original_name for o in load_plan(out).overrides if o.hidden}
+    assert "add" not in hidden and hidden  # called tool kept, others hidden

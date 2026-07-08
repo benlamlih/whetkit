@@ -271,6 +271,20 @@ def plan_init(
             help="Also keep every tool referenced by these tasks' expected_tools",
         ),
     ] = None,
+    from_traces: Annotated[
+        str | None,
+        typer.Option(
+            "--from-traces",
+            help=(
+                "Also keep every tool actually called in this trace store "
+                "(what real runs used, including tools no spec lists)"
+            ),
+        ),
+    ] = None,
+    traces_group: Annotated[
+        str | None,
+        typer.Option("--traces-group", help="Restrict --from-traces to one run group"),
+    ] = None,
     out: Annotated[
         str, typer.Option("--out", help="Where to write the plan YAML")
     ] = ".whetkit/curation-plan.yaml",
@@ -286,8 +300,18 @@ def plan_init(
         for task in load_tasks(from_tasks):
             for slot in task.expected_tool_slots:
                 keep_set.update(slot)
+    if from_traces:
+        from whetkit.tracing import TraceStore
+
+        if not Path(from_traces).is_file():
+            raise typer.BadParameter(f"no trace store at {from_traces}")
+        with TraceStore(from_traces) as trace_store:
+            for run in trace_store.load_runs(traces_group):
+                keep_set.update(run.called_tool_names)
     if not keep_set:
-        raise typer.BadParameter("nothing to keep — pass --keep and/or --from-tasks")
+        raise typer.BadParameter(
+            "nothing to keep — pass --keep, --from-tasks, and/or --from-traces"
+        )
 
     spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
