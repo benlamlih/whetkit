@@ -89,6 +89,10 @@ class EvalSummary(BaseModel):
         return sum(s.run_status == RunStatus.ERROR for s in self.scores)
 
     @property
+    def timeout_run_count(self) -> int:
+        return sum(s.run_status == RunStatus.TIMEOUT for s in self.scores)
+
+    @property
     def total_tool_errors(self) -> int:
         return sum(s.tool_errors for s in self.scores)
 
@@ -112,6 +116,15 @@ class EvalSummary(BaseModel):
                 f"⚠ Errored runs: {self.error_run_count}/{self.task_count} — the agent "
                 "loop failed (connection/provider); scores below reflect failures, "
                 "not tool selection"
+            )
+        if self.timeout_run_count:
+            # Like errored runs these are misses unless the right tools were
+            # already called before the cutoff — but they deserve their own
+            # line, because the fix (raise --task-timeout) is different.
+            lines.append(
+                f"⚠ Timed-out runs: {self.timeout_run_count}/{self.task_count} — the "
+                "agent loop was cut off by --task-timeout; scores for these reflect "
+                "the cutoff, not tool selection. Raise --task-timeout"
             )
         if self.total_tool_errors:
             lines.append(

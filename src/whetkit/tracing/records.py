@@ -20,6 +20,7 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"  # model produced a final answer
     MAX_TURNS = "max_turns"  # loop hit the turn limit before finishing
     ERROR = "error"  # provider/transport failure aborted the run
+    TIMEOUT = "timeout"  # per-task --task-timeout expired mid-run
 
 
 class ToolCallRecord(BaseModel):

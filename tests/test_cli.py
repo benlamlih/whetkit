@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 from whetkit.cli import _judge_enabled, app
 from whetkit.llm import LLMTurn, ToolCall
 
-from .fakes import FakeProvider
+from .fakes import FakeProvider, SleepyProvider
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -498,6 +498,40 @@ def test_fix_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypat
     with TraceStore(store_path) as store:
         groups = {g["run_group"] for g in store.list_groups()}
     assert groups == {"baseline-1", "baseline-2", "fix-1-1", "fix-1-2"}
+
+
+def test_task_timeout_must_be_positive(tmp_path: Path) -> None:
+    tasks = str(_mini_task_file(tmp_path))
+    for command in ("run", "curate", "fix"):
+        result = runner.invoke(app, [command, "--tasks", tasks, "--task-timeout", "0"])
+        assert result.exit_code != 0, command
+        assert "--task-timeout must be positive" in result.output, command
+
+
+def test_run_flags_timed_out_tasks_in_summary(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    provider = SleepyProvider(delay_s=30.0)
+    monkeypatch.setattr("whetkit.runner.agent.get_provider", lambda name: provider)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:sleepy",
+            "--task-timeout",
+            "0.2",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Timed-out runs: 1/1" in result.output
+    assert "Raise --task-timeout" in result.output
 
 
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:

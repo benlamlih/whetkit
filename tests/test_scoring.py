@@ -272,6 +272,24 @@ class TestAggregate:
         assert any("Errored runs: 1/2" in line for line in lines)
         assert any("Failed tool calls: 1" in line for line in lines)
 
+    async def test_timeout_visibility_in_summary(self) -> None:
+        timed_out = TaskRun(
+            task_id="t",
+            server="s",
+            model="m",
+            status=RunStatus.TIMEOUT,
+            error="task exceeded --task-timeout after 0.2s",
+        )
+        summary = await score_runs([task(["a"])], [timed_out])
+        (score,) = summary.scores
+        assert score.run_status == RunStatus.TIMEOUT
+        assert score.hit is False  # no tools were called before the cutoff
+        assert summary.timeout_run_count == 1
+        assert summary.error_run_count == 0  # its own bucket, not double-counted
+        lines = summary.summary_lines()
+        assert any("Timed-out runs: 1/1" in line for line in lines)
+        assert not any("Errored runs" in line for line in lines)
+
     async def test_judge_failure_blocks_hit(self) -> None:
         tasks = [task(["a"])]
         runs = [make_run(["a"])]

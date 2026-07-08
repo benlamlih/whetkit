@@ -555,6 +555,16 @@ def run(
             ),
         ),
     ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help=(
+                "Per-task wall-clock budget in seconds (provider turns plus tool "
+                "calls); an expired task is flagged as timed out, not hung"
+            ),
+        ),
+    ] = 120.0,
     store: Annotated[
         str | None,
         typer.Option("--store", help="Trace SQLite path (default ./.whetkit/traces.sqlite3)"),
@@ -606,10 +616,14 @@ def run(
         raise typer.BadParameter("--runs must be at least 1")
     if concurrency < 1:
         raise typer.BadParameter("--concurrency must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     store_path = store or str(default_store_path())
 
@@ -796,6 +810,13 @@ def curate(
             ),
         ),
     ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help="Per-task wall-clock budget in seconds (provider turns plus tool calls)",
+        ),
+    ] = 120.0,
     prune_unused: Annotated[
         bool,
         typer.Option(
@@ -823,10 +844,14 @@ def curate(
 
     if runs < 1:
         raise typer.BadParameter("--runs must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "curate")
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
     mode = MatchMode(match_mode)
@@ -992,6 +1017,13 @@ def fix(
             ),
         ),
     ] = 1,
+    task_timeout: Annotated[
+        float,
+        typer.Option(
+            "--task-timeout",
+            help="Per-task wall-clock budget in seconds (provider turns plus tool calls)",
+        ),
+    ] = 120.0,
     store: Annotated[str | None, typer.Option("--store")] = None,
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
@@ -1011,10 +1043,14 @@ def fix(
         raise typer.BadParameter("--max-iterations must be at least 1")
     if runs < 1:
         raise typer.BadParameter("--runs must be at least 1")
+    if task_timeout <= 0:
+        raise typer.BadParameter("--task-timeout must be positive")
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "fix")
-    config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
+    config = RunConfig(
+        model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
+    )
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
     mode = MatchMode(match_mode)

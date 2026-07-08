@@ -12,7 +12,7 @@ from whetkit.mcp import StdioSpec
 from whetkit.runner import RunConfig, run_task
 from whetkit.tracing.records import RunStatus
 
-from .fakes import FakeProvider
+from .fakes import FakeProvider, SleepyProvider
 
 MINI_SERVER = Path(__file__).parent / "fixtures" / "mini_server.py"
 
@@ -95,6 +95,27 @@ async def test_provider_failure_yields_error_status() -> None:
     run = await run_task(make_task(), mini_spec(), CONFIG, FakeProvider([]))
     assert run.status == RunStatus.ERROR
     assert "script exhausted" in (run.error or "")
+
+
+async def test_task_timeout_yields_timeout_status_quickly() -> None:
+    import time
+
+    config = RunConfig(model="fake:fake-model", max_turns=4, task_timeout_s=0.2)
+    started = time.perf_counter()
+    run = await run_task(make_task(), mini_spec(), config, SleepyProvider(delay_s=30.0))
+    elapsed = time.perf_counter() - started
+
+    assert run.status == RunStatus.TIMEOUT
+    assert run.error == "task exceeded --task-timeout after 0.2s"
+    assert run.final_text is None
+    assert run.finished_at is not None
+    # nowhere near the provider's 30s sleep: the loop was cancelled and the
+    # MCP client context (server subprocess) still closed cleanly
+    assert elapsed < 5.0
+
+
+def test_run_config_default_timeout() -> None:
+    assert RunConfig().task_timeout_s == 120.0
 
 
 def test_parse_model() -> None:
