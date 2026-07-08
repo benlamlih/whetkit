@@ -504,6 +504,17 @@ def run(
             help="Write a machine-readable summary (metrics + per-task outcomes) to this path",
         ),
     ] = None,
+    concurrency: Annotated[
+        int,
+        typer.Option(
+            "--concurrency",
+            help=(
+                "Run up to N tasks of a repetition in parallel (each gets its own "
+                "server connection). Only safe when tasks are independent — writes "
+                "to shared state should stay at 1."
+            ),
+        ),
+    ] = 1,
     reset_cmd: Annotated[
         str | None,
         typer.Option(
@@ -524,6 +535,8 @@ def run(
 
     if runs < 1:
         raise typer.BadParameter("--runs must be at least 1")
+    if concurrency < 1:
+        raise typer.BadParameter("--concurrency must be at least 1")
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
@@ -547,12 +560,16 @@ def run(
         name_map = curation_plan.rename_map()
 
     async def _run_once(group_name: str, cache: JudgeCache):
-        task_runs = []
-        for task in task_list:
-            typer.echo(f"running {task.id} ...", err=True)
-            task_runs.append(
-                await run_task(task, servers[task.server], config, client_factory=client_factory)
-            )
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _one(task):
+            async with semaphore:
+                typer.echo(f"running {task.id} ...", err=True)
+                return await run_task(
+                    task, servers[task.server], config, client_factory=client_factory
+                )
+
+        task_runs = list(await asyncio.gather(*(_one(task) for task in task_list)))
 
         with TraceStore(store_path) as trace_store:
             trace_store.save_runs(task_runs, run_group=group_name)
