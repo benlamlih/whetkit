@@ -255,6 +255,62 @@ def generate(
     typer.echo(f"  whetkit run --server {server} --tasks {out}")
 
 
+@app.command(name="plan-init")
+def plan_init(
+    server: Annotated[
+        str,
+        typer.Option("--server", help="MCP server: URL, directory, server.json, or server.py"),
+    ],
+    keep: Annotated[
+        str, typer.Option("--keep", help="Comma-separated tool names to keep visible")
+    ] = "",
+    from_tasks: Annotated[
+        str | None,
+        typer.Option(
+            "--from-tasks",
+            help="Also keep every tool referenced by these tasks' expected_tools",
+        ),
+    ] = None,
+    out: Annotated[
+        str, typer.Option("--out", help="Where to write the plan YAML")
+    ] = ".whetkit/curation-plan.yaml",
+    http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
+) -> None:
+    """Scaffold a view plan: keep the named tools, hide everything else.
+    The fastest way to serve a lean read-only slice of a big server."""
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+    from whetkit.datasets import load_tasks
+
+    keep_set = {name.strip() for name in keep.split(",") if name.strip()}
+    if from_tasks:
+        for task in load_tasks(from_tasks):
+            for slot in task.expected_tool_slots:
+                keep_set.update(slot)
+    if not keep_set:
+        raise typer.BadParameter("nothing to keep — pass --keep and/or --from-tasks")
+
+    spec = _resolve_server(server, http_mode)
+    inventory = asyncio.run(inspect_server(spec))
+    names = {t.name for t in inventory.tools}
+    if unknown := sorted(keep_set - names):
+        typer.echo(f"warning: not on the server, ignoring: {', '.join(unknown)}", err=True)
+
+    hidden = [
+        ToolOverride(original_name=t.name, hidden=True, reason="Not part of this view's workflows.")
+        for t in inventory.tools
+        if t.name not in keep_set
+    ]
+    plan = CurationPlan(
+        server=spec.label(),
+        notes=f"View plan: keep {len(names & keep_set)} tool(s), hide the rest.",
+        overrides=hidden,
+    )
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    save_plan(plan, out)
+    typer.echo(f"kept {len(names & keep_set)}, hidden {len(hidden)} — wrote {out}")
+    typer.echo(f"score it:  whetkit run --server {server} --tasks <tasks> --plan {out}")
+
+
 @app.command()
 def export(
     plan: Annotated[

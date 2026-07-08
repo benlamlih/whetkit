@@ -200,3 +200,32 @@ def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "reset-cmd failed with exit code 3" in result.output
     assert "Traceback" not in result.output
+
+
+def test_plan_init_scaffolds_view_plan(tmp_path: Path) -> None:
+    from whetkit.curation import load_plan
+
+    out = tmp_path / "plan.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "plan-init",
+            "--server",
+            str(FIXTURES / "mini_server.py"),
+            "--keep",
+            "add,ghost_tool",
+            "--out",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "ignoring: ghost_tool" in result.output
+    plan = load_plan(out)
+    hidden = {o.original_name for o in plan.overrides if o.hidden}
+    assert "add" not in hidden and hidden  # everything except 'add' hidden
+
+
+def test_plan_init_requires_a_keep_set() -> None:
+    result = runner.invoke(app, ["plan-init", "--server", str(FIXTURES / "mini_server.py")])
+    assert result.exit_code != 0
+    assert "nothing to keep" in result.output
