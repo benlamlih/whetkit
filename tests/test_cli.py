@@ -231,6 +231,93 @@ def test_plan_init_requires_a_keep_set() -> None:
     assert "nothing to keep" in result.output
 
 
+def _multi_server_task_file(tmp_path: Path) -> Path:
+    """Two tasks against two genuinely different servers."""
+    mini = FIXTURES / "mini_server.py"
+    sample = Path(__file__).parent.parent / "examples" / "sample-server"
+    tasks = tmp_path / "tasks.yaml"
+    tasks.write_text(
+        f"- id: on-mini\n"
+        f"  prompt: add 2 and 3\n"
+        f"  server: {mini}\n"
+        f"  expected_tools: [add]\n"
+        f"  success_criteria: says 5\n"
+        f"- id: on-sample\n"
+        f"  prompt: find a mouse\n"
+        f"  server: {sample}\n"
+        f"  expected_tools: [data_query_1]\n"
+        f"  success_criteria: names a mouse\n"
+    )
+    return tasks
+
+
+def _forbid_agent_runs(monkeypatch) -> None:
+    """Fail loudly if the command reaches the agent loop (and its provider)."""
+
+    async def _boom(*args, **kwargs):
+        raise AssertionError("run_task must not be reached")
+
+    monkeypatch.setattr("whetkit.runner.run_task", _boom)
+
+
+def test_curate_refuses_multi_server_task_sets(tmp_path: Path, monkeypatch) -> None:
+    _forbid_agent_runs(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_multi_server_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "2 different servers" in result.output
+    assert "unsupported" in result.output
+    assert "once per server" in result.output
+
+
+def test_fix_refuses_multi_server_task_sets(tmp_path: Path, monkeypatch) -> None:
+    _forbid_agent_runs(monkeypatch)
+    result = runner.invoke(
+        app,
+        [
+            "fix",
+            "--tasks",
+            str(_multi_server_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "2 different servers" in result.output
+    assert "whetkit fix" in result.output
+
+
+def test_curate_accepts_single_server_after_override(tmp_path: Path) -> None:
+    # --server collapses a multi-server task set onto one spec: the guard
+    # must not fire then.
+    from whetkit.cli import _resolve_task_servers, _single_server_spec
+    from whetkit.datasets import load_tasks
+    from whetkit.mcp import HttpMode
+
+    tasks = load_tasks(_multi_server_task_file(tmp_path))
+    servers = _resolve_task_servers(tasks, str(FIXTURES / "mini_server.py"), HttpMode.STATEFUL)
+    spec = _single_server_spec(servers, "curate")
+    assert "mini_server.py" in spec.label()
+
+
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:
     from whetkit.curation import load_plan
     from whetkit.tracing import TaskRun, ToolCallRecord, TraceStore, TurnRecord

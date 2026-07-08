@@ -47,6 +47,25 @@ def _resolve_task_servers(
     }
 
 
+def _single_server_spec(servers: dict[str, ServerSpec], command: str) -> ServerSpec:
+    """The one server a curation command may target.
+
+    curate/fix inspect ONE server and write ONE plan. Silently curating only
+    ``next(iter(servers))`` while the tasks span several servers would grade
+    the plan against runs it never touched — refuse instead, before any
+    provider call spends money.
+    """
+    distinct = {spec.model_dump_json(): spec for spec in servers.values()}
+    if len(distinct) > 1:
+        labels = ", ".join(sorted(spec.label() for spec in distinct.values()))
+        raise typer.BadParameter(
+            f"tasks span {len(distinct)} different servers ({labels}) — curating "
+            f"multiple servers in one plan is unsupported. Run 'whetkit {command}' "
+            "once per server (split the task set, or pass --server to force one)."
+        )
+    return next(iter(servers.values()))
+
+
 def _write_report(report, out_dir: str) -> tuple[str, str]:
     from whetkit.report import render_html
 
@@ -743,6 +762,7 @@ def curate(
 
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
+    curation_spec = _single_server_spec(servers, "curate")
     config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
@@ -771,7 +791,7 @@ def curate(
             )
 
             typer.echo("== proposing curation plan ==", err=True)
-            inventory = await inspect_server(next(iter(servers.values())))
+            inventory = await inspect_server(curation_spec)
             plan, warnings = await propose_plan(
                 inventory,
                 task_list,
@@ -824,7 +844,7 @@ def curate(
             curated,
             plan,
             model=model,
-            server=next(iter(servers.values())).label(),
+            server=curation_spec.label(),
             tools_before=inventory.tool_count,
             tools_after=len(plan.presented_to_original(origin_names)),
         )
@@ -902,6 +922,7 @@ def fix(
         raise typer.BadParameter("--max-iterations must be at least 1")
     task_list = load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
+    curation_spec = _single_server_spec(servers, "fix")
     config = RunConfig(model=model, max_turns=max_turns, max_tokens=max_tokens)
     use_judge = _judge_enabled(judge, judge_model)
     judge_config = JudgeConfig(model=judge_model)
@@ -937,7 +958,7 @@ def fix(
                 judge_cache=cache,
                 use_judge=use_judge,
             )
-            inventory = await _inspect(next(iter(servers.values())))
+            inventory = await _inspect(curation_spec)
 
             typer.echo("== proposing plan (iteration 1) ==", err=True)
             plan, warnings = await propose_plan(
