@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose an improvement or new capability for whetkit
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that whetkit doesn't support (or makes painful)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like whetkit to do? CLI sketches welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today, or other designs you thought about.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Server size, models used, CI setup — anything that shapes the need.

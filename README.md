@@ -1,5 +1,10 @@
 # whetkit
 
+[![PyPI](https://img.shields.io/pypi/v/whetkit)](https://pypi.org/project/whetkit/)
+[![CI](https://github.com/benlamlih/whetkit/actions/workflows/ci.yml/badge.svg)](https://github.com/benlamlih/whetkit/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+
 **Measure — then improve — how well LLM agents pick and use the tools your MCP
 server exposes.**
 
