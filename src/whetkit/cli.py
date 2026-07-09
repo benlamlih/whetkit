@@ -1045,7 +1045,13 @@ def curate(
     from whetkit.curation.optimizer import prune_unused as apply_prune_unused
     from whetkit.mcp import MCPClient, inspect_server
     from whetkit.runner import RunConfig
-    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
+    from whetkit.scoring import (
+        JudgeCache,
+        JudgeConfig,
+        MultiRunSummary,
+        hit_rate_noise_caveat,
+        score_runs,
+    )
     from whetkit.tracing import default_store_path
 
     if runs < 1:
@@ -1173,6 +1179,8 @@ def curate(
             f"Precision: {baseline_multi.avg_precision_spread()} -> "
             f"{curated_multi.avg_precision_spread()}"
         )
+        if caveat := hit_rate_noise_caveat(baseline_multi, curated_multi):
+            typer.echo(caveat)
         tok_before = (report.before.input_tokens + report.before.output_tokens) // len(task_list)
         tok_after = (report.after.input_tokens + report.after.output_tokens) // len(task_list)
         typer.echo(
@@ -1264,7 +1272,13 @@ def fix(
     from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
     from whetkit.curation.optimizer import OptimizerConfig, propose_revision
     from whetkit.runner import RunConfig
-    from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
+    from whetkit.scoring import (
+        JudgeCache,
+        JudgeConfig,
+        MultiRunSummary,
+        hit_rate_noise_caveat,
+        score_runs,
+    )
     from whetkit.tracing import default_store_path
 
     if max_iterations < 1:
@@ -1390,6 +1404,8 @@ def fix(
             f"Extra calls: {baseline_multi.mean_avg_extra_calls:.1f} -> "
             f"{best_multi.mean_avg_extra_calls:.1f}/task"
         )
+        if caveat := hit_rate_noise_caveat(baseline_multi, best_multi):
+            typer.echo(caveat)
         typer.echo(_usage_cost_line(model, spent_runs))
         typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
 
