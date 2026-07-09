@@ -199,6 +199,34 @@ class TestAggregate:
         assert stable.flaky_tasks() == []
         assert any("Hit-rate: 100%" in line for line in stable.summary_lines())
 
+    async def test_hit_rate_noise_caveat(self) -> None:
+        from whetkit.scoring import MultiRunSummary, hit_rate_noise_caveat
+
+        tasks = [task(["a"])]
+        good = await score_runs(tasks, [make_run(["a"])])  # hit_rate 100%
+        bad = await score_runs(tasks, [make_run(["x"])])  # hit_rate 0%
+
+        def multi(*summaries):
+            return MultiRunSummary(summaries=list(summaries))
+
+        # single run per side, real improvement -> single-run caveat
+        caveat = hit_rate_noise_caveat(multi(bad), multi(good))
+        assert caveat is not None and "single run" in caveat
+
+        # repeated runs, overlapping ranges -> overlap caveat
+        # before {0%,100%} (max 100%) vs after {100%,100%} (min 100%): ranges touch
+        caveat = hit_rate_noise_caveat(multi(bad, good), multi(good, good))
+        assert caveat is not None and "ranges overlap" in caveat
+
+        # repeated runs, clean separation -> no caveat
+        assert hit_rate_noise_caveat(multi(bad, bad), multi(good, good)) is None
+
+        # no improvement claimed (flat) -> no caveat, even at n=1
+        assert hit_rate_noise_caveat(multi(good), multi(good)) is None
+
+        # regression -> no noise caveat (the numbers already tell the story)
+        assert hit_rate_noise_caveat(multi(good, good), multi(bad, bad)) is None
+
     async def test_multi_run_means_and_spread_strings(self) -> None:
         from whetkit.scoring import MultiRunSummary
 

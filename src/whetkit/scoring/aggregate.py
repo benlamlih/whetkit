@@ -206,6 +206,36 @@ class MultiRunSummary(BaseModel):
         return sorted(task_id for task_id, seen in outcomes.items() if len(seen) > 1)
 
 
+def hit_rate_noise_caveat(before: "MultiRunSummary", after: "MultiRunSummary") -> str | None:
+    """Return a one-line caveat when a reported hit-rate improvement cannot be
+    told apart from run-to-run noise, else ``None``.
+
+    The whole "prove it" claim rests on this. A single run per side is
+    quantized and noisy — one task flipping moves a 5-task eval by 20 points.
+    Even across repeated runs, an improvement whose before/after ranges
+    overlap sits inside observed variance. Only fires when an improvement is
+    actually being claimed (after mean > before mean); a flat or regressing
+    result needs no noise caveat."""
+    before_rates = [s.hit_rate for s in before.summaries]
+    after_rates = [s.hit_rate for s in after.summaries]
+    if not before_rates or not after_rates:
+        return None
+    delta = sum(after_rates) / len(after_rates) - sum(before_rates) / len(before_rates)
+    if delta <= 0:
+        return None
+    if len(before_rates) < 2 or len(after_rates) < 2:
+        return (
+            "⚠ single run per side — an improvement this size may be run-to-run "
+            "noise; re-run with --runs 3 to confirm it is real"
+        )
+    if min(after_rates) <= max(before_rates):
+        return (
+            "⚠ before/after hit-rate ranges overlap — the improvement is within "
+            "run-to-run noise, not yet distinguishable from chance (add runs or tasks)"
+        )
+    return None
+
+
 async def score_runs(
     tasks: list[TaskSpec],
     runs: list[TaskRun],
