@@ -5,17 +5,22 @@ mappings. The format is documented in docs/task-format.md; the source of
 truth for validation is :class:`TaskSpec`.
 """
 
+import difflib
 import re
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class TaskSpec(BaseModel):
     """One eval task: a user request plus what a correct agent run looks like."""
+
+    # A typo'd field (orderd: true) must fail loudly, not silently drop the
+    # constraint it was meant to set.
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     prompt: str = Field(min_length=1)
@@ -71,6 +76,27 @@ class TaskSpec(BaseModel):
         return self.server
 
 
+def _validation_message(exc: Exception) -> str:
+    """Human-first message for a failed task validation. Unknown fields get
+    named explicitly with a closest-match suggestion (a typo'd field used to
+    be silently ignored — the error must say exactly what was wrong)."""
+    if isinstance(exc, ValidationError):
+        unknown = [str(err["loc"][-1]) for err in exc.errors() if err["type"] == "extra_forbidden"]
+        if unknown:
+            known = list(TaskSpec.model_fields)
+            parts = []
+            for field in unknown:
+                matches = difflib.get_close_matches(field, known, n=3)
+                hint = (
+                    f" — did you mean one of: {', '.join(matches)}?"
+                    if matches
+                    else f" (valid fields: {', '.join(known)})"
+                )
+                parts.append(f"unknown field {field!r}{hint}")
+            return "; ".join(parts)
+    return str(exc)
+
+
 def load_task_file(path: Path) -> list[TaskSpec]:
     """Load one YAML file containing a task mapping or a list of them."""
     data = yaml.safe_load(path.read_text())
@@ -84,7 +110,7 @@ def load_task_file(path: Path) -> list[TaskSpec]:
         try:
             task = TaskSpec.model_validate(raw)
         except Exception as exc:
-            raise ValueError(f"{path}: entry {i} is invalid: {exc}") from exc
+            raise ValueError(f"{path}: entry {i} is invalid: {_validation_message(exc)}") from exc
         task = task.model_copy(update={"server": task.resolve_server(path.parent)})
         tasks.append(task)
     return tasks

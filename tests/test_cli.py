@@ -303,6 +303,73 @@ def test_diff_missing_file_is_friendly(tmp_path: Path) -> None:
     assert "no summary file" in result.output
 
 
+def test_diff_rejects_non_summary_json(tmp_path: Path) -> None:
+    # a valid JSON file that is not a --summary-json output (e.g. report.json)
+    wrong = tmp_path / "report.json"
+    wrong.write_text(json.dumps({"title": "whetkit report", "tasks": []}))
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"runs": [{"hit_rate": 1.0, "tasks": [{"id": "t", "hit": True}]}]}))
+
+    result = runner.invoke(app, ["diff", str(wrong), str(good)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    text = plain(result.output)
+    assert "report.json" in text  # names WHICH file is wrong
+    assert "not a 'whetkit run --summary-json' output" in text
+
+
+def test_diff_rejects_invalid_json(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    result = runner.invoke(app, ["diff", str(bad), str(bad)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "invalid JSON" in plain(result.output)
+
+
+def test_bad_tasks_path_is_a_clean_error_everywhere(tmp_path: Path) -> None:
+    for command in ("run", "curate", "fix", "report"):
+        result = runner.invoke(app, [command, "--tasks", str(tmp_path / "nope.yaml")])
+        assert result.exit_code == 2, (command, result.output)
+        assert "Traceback" not in result.output, command
+        assert "nope.yaml" in plain(result.output), command
+        assert "no such file" in plain(result.output), command
+
+
+def test_invalid_task_yaml_is_a_clean_error(tmp_path: Path) -> None:
+    tasks = tmp_path / "broken.yaml"
+    tasks.write_text("id: [unclosed\nprompt: {{{{\n")  # not valid YAML
+    result = runner.invoke(app, ["run", "--tasks", str(tasks)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "broken.yaml" in plain(result.output)
+
+
+def test_task_missing_required_field_is_a_clean_error(tmp_path: Path) -> None:
+    tasks = tmp_path / "task.yaml"
+    tasks.write_text(
+        f"id: add-two\nserver: {FIXTURES / 'mini_server.py'}\n"
+        f"expected_tools: [add]\nsuccess_criteria: says 5\n"  # no prompt
+    )
+    result = runner.invoke(app, ["run", "--tasks", str(tasks)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    text = plain(result.output)
+    assert "task.yaml" in text and "prompt" in text
+
+
+def test_unparseable_plan_is_a_clean_error(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.yaml"
+    plan.write_text("overrides: [unclosed\n")
+    result = runner.invoke(
+        app,
+        ["run", "--tasks", str(_mini_task_file(tmp_path)), "--plan", str(plan)],
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "cannot load curation plan" in plain(result.output)
+
+
 def test_diff_renders_dash_when_judging_was_absent(tmp_path: Path) -> None:
     def doc(judge_rate: float | None):
         return {
@@ -338,7 +405,9 @@ def test_diff_renders_dash_when_judging_was_absent(tmp_path: Path) -> None:
     assert "—" in line and "100%" in line
 
 
-def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
+def test_reset_cmd_failure_is_friendly(tmp_path: Path, monkeypatch) -> None:
+    # a dummy key so the provider preflight passes; --reset-cmd fails before any run
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
     result = runner.invoke(
         app,
         [
@@ -602,6 +671,7 @@ def test_fix_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypat
     assert result.exit_code == 0, result.output
     assert _agent_run_count(agent) == 4  # 2 baseline reps + 2 curated reps
     assert "Hit-rate: 50% [0%–100%] -> 100%" in result.output
+    assert "Tokens in/out:" in result.output  # cost/usage line, like run and curate
     with TraceStore(store_path) as store:
         groups = {g["run_group"] for g in store.list_groups()}
     assert groups == {"baseline-1", "baseline-2", "fix-1-1", "fix-1-2"}
@@ -722,9 +792,337 @@ def test_run_flags_timed_out_tasks_in_summary(tmp_path: Path, monkeypatch) -> No
             str(tmp_path / "t.sqlite3"),
         ],
     )
-    assert result.exit_code == 0, result.output
+    # the summary is still printed in full, but a timed-out run is an
+    # infrastructure failure — the command must not exit 0
+    assert result.exit_code == 3, result.output
     assert "Timed-out runs: 1/1" in result.output
     assert "Raise --task-timeout" in result.output
+    assert "1 task run(s) errored — exit 3" in plain(result.output)
+
+
+def test_curate_drops_optimizer_hides_of_task_required_tools(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import load_plan
+
+    monkeypatch.chdir(tmp_path)
+    agent = _patch_agent_provider(monkeypatch, _agent_turns_hit() + _agent_turns_hit())
+    # the optimizer tries to hide 'add' — the only tool task add-two requires
+    _patch_optimizer_provider(
+        monkeypatch,
+        overrides=[{"original_name": "add", "action": "prune", "reason": "noise"}],
+    )
+
+    plan_path = tmp_path / "plan.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:claude-sonnet-5",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(tmp_path / "traces.sqlite3"),
+            "--plan",
+            str(plan_path),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 2
+    assert "kept add: required by task add-two" in plain(result.output)
+    plan = load_plan(plan_path)
+    assert not any(o.hidden for o in plan.overrides)  # the hide was dropped
+    # the estimated cost line run already prints is now part of curate too
+    assert "Tokens in/out:" in result.output
+    assert "≈ $" in result.output  # fake:claude-sonnet-5 has a known price
+
+
+def test_curate_regression_exits_4_with_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    # baseline hits, curated misses -> 100% -> 0% regression
+    _patch_agent_provider(monkeypatch, _agent_turns_hit() + _agent_turns_miss())
+    _patch_optimizer_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(tmp_path / "traces.sqlite3"),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 4, result.output
+    text = plain(result.output)
+    assert "REGRESSION: the curated view scored LOWER than baseline (100% -> 0%)" in text
+    assert "Do not adopt this plan" in text
+    assert "'whetkit fix'" in text and "'whetkit run --plan'" in text
+    # the full summary still printed before the failure exit
+    assert "Report:" in result.output
+
+
+def test_run_plan_warns_when_plan_hides_task_required_tools(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    _patch_agent_provider(monkeypatch, _agent_turns_miss())
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(
+        CurationPlan(overrides=[ToolOverride(original_name="add", hidden=True)]),
+        plan_path,
+    )
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--plan",
+            str(plan_path),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output  # warn only — the plan is the user's
+    text = plain(result.output)
+    assert "plan hides 'add'" in text
+    assert "'add-two' expects it" in text
+
+
+def _seed_before_after_traces(store_path: Path, task_id: str) -> None:
+    from whetkit.tracing import TaskRun, TraceStore
+
+    with TraceStore(store_path) as store:
+        store.save_runs([TaskRun(task_id=task_id, server="s", model="m")], run_group="baseline")
+        store.save_runs([TaskRun(task_id=task_id, server="s", model="m")], run_group="curated")
+
+
+def test_report_recomputes_tool_counts_from_the_server(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    store_path = tmp_path / "traces.sqlite3"
+    _seed_before_after_traces(store_path, "order-status")
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(
+        CurationPlan(overrides=[ToolOverride(original_name="do_thing", hidden=True)]), plan_path
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--plan",
+            str(plan_path),
+            "--store",
+            str(store_path),
+            "--judge",
+            "off",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert report["tools_before"] == 14  # re-inspected from the sample server
+    assert report["tools_after"] == 13  # 14 minus the hidden do_thing
+
+
+def test_report_tool_counts_stay_none_when_server_unreachable(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    tasks = tmp_path / "task.yaml"
+    tasks.write_text(
+        "id: ghost\n"
+        "prompt: p\n"
+        "server: does-not-exist-server\n"
+        "expected_tools: [t]\n"
+        "success_criteria: c\n"
+    )
+    store_path = tmp_path / "traces.sqlite3"
+    _seed_before_after_traces(store_path, "ghost")
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(CurationPlan(), plan_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--tasks",
+            str(tasks),
+            "--plan",
+            str(plan_path),
+            "--store",
+            str(store_path),
+            "--judge",
+            "off",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert report["tools_before"] is None and report["tools_after"] is None
+
+
+def test_run_missing_provider_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)  # preflight must refuse before the agent loop
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "ANTHROPIC_API_KEY is not set" in plain(result.output)
+    assert "agent model" in plain(result.output)
+
+
+def test_run_missing_judge_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--model",
+            "fake:agent",
+            "--judge",
+            "on",
+            "--judge-model",
+            "openai:gpt-5.2",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "OPENAI_API_KEY is not set" in plain(result.output)
+    assert "judge model" in plain(result.output)
+
+
+def test_curate_and_fix_missing_optimizer_key_fails_before_any_spend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)
+    for command in ("curate", "fix"):
+        result = runner.invoke(
+            app,
+            [
+                command,
+                "--tasks",
+                str(_mini_task_file(tmp_path)),
+                "--model",
+                "fake:agent",
+                "--optimizer-model",
+                "openai:gpt-5.2",
+                "--judge",
+                "off",
+                "--store",
+                str(tmp_path / "t.sqlite3"),
+            ],
+        )
+        assert result.exit_code == 2, (command, result.output)
+        assert "OPENAI_API_KEY is not set" in plain(result.output), command
+        assert "optimizer model" in plain(result.output), command
+
+
+def test_generate_missing_key_is_a_clean_error(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = runner.invoke(
+        app, ["generate", "--server", str(FIXTURES / "mini_server.py"), "--count", "1"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "ANTHROPIC_API_KEY is not set" in plain(result.output)
+
+
+def test_run_exits_3_when_runs_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    # an exhausted script makes the provider raise inside the agent loop -> ERROR run
+    _patch_agent_provider(monkeypatch, [])
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 3, result.output
+    # the full summary still prints (including the real per-run error), THEN exit 3
+    assert "Hit-rate:" in result.output
+    assert "Errored runs: 1/1" in result.output
+    assert "AssertionError" in result.output  # the underlying error is surfaced
+    assert "1 task run(s) errored — exit 3" in plain(result.output)
+    assert "infrastructure failure, not a tool-selection result" in plain(result.output)
+
+
+def test_run_happy_path_still_exits_0(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _patch_agent_provider(monkeypatch, _agent_turns_hit())
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Hit-rate: 100%" in result.output
+    # the Cloud waitlist hint prints after the summary
+    assert "whetkit Cloud" in result.output
+    assert "issues/new?template=cloud-waitlist.yml" in result.output
 
 
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:

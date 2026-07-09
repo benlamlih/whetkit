@@ -181,6 +181,24 @@ Scope note: whetkit is deliberately a local-first CLI. Hosting, dashboards,
 multi-tenancy, and security tooling are out of scope for Stage 1 — the
 architecture just leaves room for them.
 
+## Telemetry
+
+whetkit collects **no telemetry by default**. If you opt in — with
+`whetkit telemetry on` or `WHETKIT_TELEMETRY=1` — each command sends one
+anonymous event containing exactly these fields and nothing else:
+
+- the command name (e.g. `run`)
+- the whetkit version
+- the Python version (major.minor)
+- the operating system (`sys.platform`)
+- a random anonymous id stored in `~/.whetkit/telemetry.json`
+
+Never collected: arguments, file paths, server names, prompts, or results.
+Sending is fire-and-forget (2 s timeout, failures ignored) and can never
+block or break a command. Opt out any time with `whetkit telemetry off` (or
+`WHETKIT_TELEMETRY=0`, which overrides the config file); inspect the current
+state with `whetkit telemetry status`.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

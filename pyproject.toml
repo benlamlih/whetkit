@@ -1,6 +1,6 @@
 [project]
 name = "whetkit"
-version = "0.6.0"
+version = "0.7.0"
 description = "Measure and improve how well LLM agents select and use the tools exposed by an MCP server"
 readme = "README.md"
 license = "Apache-2.0"
@@ -35,6 +35,7 @@ dependencies = [
     "pydantic==2.13.4",
     "pyyaml==6.0.3",
     "typer==0.26.8",
+    "httpx==0.28.1",
 ]
 
 [project.urls]
