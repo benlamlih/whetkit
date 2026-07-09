@@ -9,8 +9,8 @@ release exists.
 
 | Tool | Version | Checked | Source | Notes |
 |---|---|---|---|---|
-| Python | 3.13 (3.13.12 locally) | 2026-07-07 | `uv python list` / python.org | 3.14.x is current stable upstream, but the environment's uv (0.8.17) only offers 3.14.0rc2 (pre-release). 3.13 is the conservative, broadly supported choice; every pinned dependency supports it. Recorded in `.python-version`. |
-| uv | 0.8.17 | 2026-07-07 | `uv --version` (preinstalled) | Package/env manager. Build backend pinned to matching `uv_build>=0.8.17,<0.9.0`. |
+| Python | 3.13 (3.13.12 locally) | 2026-07-09 | `uv run python --version` / python.org | 3.14.x is current stable upstream, but the environment's uv (0.8.17) only offers 3.14.0rc2 (pre-release). 3.13 is the conservative, broadly supported choice; every pinned dependency supports it. Recorded in `.python-version`. |
+| uv | 0.8.17 | 2026-07-09 | `uv --version` (preinstalled) | Package/env manager. Build backend pinned to matching `uv_build>=0.8.17,<0.9.0`. |
 
 ## Runtime dependencies (pinned in `pyproject.toml`)
 
@@ -22,6 +22,7 @@ release exists.
 | pydantic | 2.13.4 | 2026-07-07 | https://pypi.org/pypi/pydantic/json | Task schema validation. |
 | pyyaml | 6.0.3 | 2026-07-07 | https://pypi.org/pypi/pyyaml/json | Task file parsing. |
 | typer | 0.26.8 | 2026-07-07 | https://pypi.org/pypi/typer/json | CLI framework. |
+| httpx | 0.28.1 | 2026-07-09 | `uv.lock` (already pinned there as a transitive dep of mcp/anthropic/openai) | Promoted to a direct dependency for the opt-in telemetry POST; same version the lock already resolved, so no pin changed. |
 
 ## Dev dependencies
 
