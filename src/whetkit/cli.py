@@ -24,6 +24,34 @@ def _resolve_server(value: str, http_mode: HttpMode) -> ServerSpec:
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _load_tasks(path: str):
+    """load_tasks with fat-finger errors (missing path, invalid YAML, schema
+    violations) rendered as clean CLI errors instead of tracebacks."""
+    import yaml
+
+    from whetkit.datasets import load_tasks
+
+    try:
+        return load_tasks(path)
+    except ValueError as exc:
+        # load_tasks messages already name the offending file
+        raise typer.BadParameter(str(exc)) from exc
+    except (OSError, yaml.YAMLError) as exc:
+        raise typer.BadParameter(f"cannot read tasks from {path}: {exc}") from exc
+
+
+def _load_plan(path: str):
+    """load_plan with YAML/schema/read errors rendered as clean CLI errors."""
+    import yaml
+
+    from whetkit.curation import load_plan
+
+    try:
+        return load_plan(path)
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        raise typer.BadParameter(f"cannot load curation plan {path}: {exc}") from exc
+
+
 _PROVIDER_KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
 
@@ -501,11 +529,10 @@ def plan_init(
     """Scaffold a view plan: keep the named tools, hide everything else.
     The fastest way to serve a lean read-only slice of a big server."""
     from whetkit.curation import CurationPlan, ToolOverride, save_plan
-    from whetkit.datasets import load_tasks
 
     keep_set = {name.strip() for name in keep.split(",") if name.strip()}
     if from_tasks:
-        for task in load_tasks(from_tasks):
+        for task in _load_tasks(from_tasks):
             for slot in task.expected_tool_slots:
                 keep_set.update(slot)
     if from_traces:
@@ -561,7 +588,6 @@ def export(
     out: Annotated[str | None, typer.Option("--out", help="Write here instead of stdout")] = None,
 ) -> None:
     """Export a curation plan as a shareable fix report or neutral JSON."""
-    from whetkit.curation import load_plan
     from whetkit.curation.export import plan_to_json, plan_to_markdown
 
     if to not in ("markdown", "json"):
@@ -570,7 +596,7 @@ def export(
         raise typer.BadParameter(
             f"no curation plan at {plan} — run 'whetkit curate' first, or pass --plan"
         )
-    curation_plan = load_plan(plan)
+    curation_plan = _load_plan(plan)
     if not curation_plan.overrides:
         typer.echo("plan has no overrides — nothing to export", err=True)
         raise typer.Exit(code=1)
@@ -593,11 +619,29 @@ def diff(
     transitions. The before/after table without re-running anything."""
     import json as jsonlib
 
-    docs = []
-    for path in (before, after):
+    def _load_summary(path: str) -> dict:
+        """Parse one --summary-json file, refusing anything else cleanly."""
         if not Path(path).is_file():
             raise typer.BadParameter(f"no summary file at {path}")
-        docs.append(jsonlib.loads(Path(path).read_text()))
+        not_a_summary = f"{path} is not a 'whetkit run --summary-json' output"
+        try:
+            doc = jsonlib.loads(Path(path).read_text())
+        except jsonlib.JSONDecodeError as exc:
+            raise typer.BadParameter(f"{not_a_summary}: invalid JSON ({exc})") from exc
+        runs_docs = doc.get("runs") if isinstance(doc, dict) else None
+        if not isinstance(runs_docs, list) or not all(
+            isinstance(run_doc, dict)
+            and isinstance(run_doc.get("tasks"), list)
+            and all(isinstance(t, dict) and "id" in t and "hit" in t for t in run_doc["tasks"])
+            for run_doc in runs_docs
+        ):
+            raise typer.BadParameter(
+                f"{not_a_summary} (expected a top-level 'runs' list with per-task "
+                "'id'/'hit' entries) — pass files written by 'whetkit run --summary-json'"
+            )
+        return doc
+
+    docs = [_load_summary(path) for path in (before, after)]
 
     def mean(doc: dict, key: str) -> float | None:
         values = [r[key] for r in doc["runs"] if r.get(key) is not None]
@@ -751,7 +795,6 @@ def run(
     http_mode: Annotated[HttpMode, typer.Option("--http-mode")] = HttpMode.STATEFUL,
 ) -> None:
     """Run eval tasks against an MCP server and print scored results."""
-    from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig, run_task
     from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import TraceStore, default_store_path, write_jsonl
@@ -764,7 +807,7 @@ def run(
         raise typer.BadParameter("--task-timeout must be positive")
     mode = _match_mode(match_mode)
 
-    task_list = load_tasks(tasks)
+    task_list = _load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     config = RunConfig(
         model=model, max_turns=max_turns, max_tokens=max_tokens, task_timeout_s=task_timeout
@@ -779,11 +822,11 @@ def run(
     if plan is not None:
         from functools import partial
 
-        from whetkit.curation import CuratedMCPClient, load_plan
+        from whetkit.curation import CuratedMCPClient
 
         if not Path(plan).is_file():
             raise typer.BadParameter(f"no curation plan at {plan}")
-        curation_plan = load_plan(plan)
+        curation_plan = _load_plan(plan)
         _warn_plan_hides_required_tools(curation_plan, task_list)
         client_factory = partial(CuratedMCPClient, plan=curation_plan)
         name_map = curation_plan.rename_map()
@@ -986,7 +1029,6 @@ def curate(
     from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
     from whetkit.curation.optimizer import OptimizerConfig
     from whetkit.curation.optimizer import prune_unused as apply_prune_unused
-    from whetkit.datasets import load_tasks
     from whetkit.mcp import MCPClient, inspect_server
     from whetkit.runner import RunConfig
     from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
@@ -997,7 +1039,7 @@ def curate(
     if task_timeout <= 0:
         raise typer.BadParameter("--task-timeout must be positive")
     mode = _match_mode(match_mode)
-    task_list = load_tasks(tasks)
+    task_list = _load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "curate")
     config = RunConfig(
@@ -1206,7 +1248,6 @@ def fix(
 
     from whetkit.curation import CuratedMCPClient, propose_plan, save_plan
     from whetkit.curation.optimizer import OptimizerConfig, propose_revision
-    from whetkit.datasets import load_tasks
     from whetkit.runner import RunConfig
     from whetkit.scoring import JudgeCache, JudgeConfig, MultiRunSummary, score_runs
     from whetkit.tracing import default_store_path
@@ -1218,7 +1259,7 @@ def fix(
     if task_timeout <= 0:
         raise typer.BadParameter("--task-timeout must be positive")
     mode = _match_mode(match_mode)
-    task_list = load_tasks(tasks)
+    task_list = _load_tasks(tasks)
     servers = _resolve_task_servers(task_list, server, http_mode)
     curation_spec = _single_server_spec(servers, "fix")
     config = RunConfig(
@@ -1367,19 +1408,17 @@ def report(
 ) -> None:
     """Rebuild the before/after report from stored traces (judge verdicts
     come from the cache when available)."""
-    from whetkit.curation import load_plan
-    from whetkit.datasets import load_tasks
     from whetkit.report import build_report
     from whetkit.scoring import JudgeCache, JudgeConfig, score_runs
     from whetkit.tracing import TraceStore, default_store_path
 
     mode = _match_mode(match_mode)
-    task_list = load_tasks(tasks)
+    task_list = _load_tasks(tasks)
     if not Path(plan).is_file():
         raise typer.BadParameter(
             f"no curation plan at {plan} — run 'whetkit curate' first, or pass --plan"
         )
-    curation_plan = load_plan(plan)
+    curation_plan = _load_plan(plan)
     store_path = store or str(default_store_path())
     use_judge = _judge_enabled(judge, judge_model)
 
@@ -1468,12 +1507,13 @@ def overlay(
 ) -> None:
     """Serve the curated view of a server as a stdio MCP server (reversible:
     the origin is never modified)."""
-    from whetkit.curation import load_plan, serve_overlay
+    from whetkit.curation import serve_overlay
     from whetkit.curation.overlay import InvalidPlanError
 
     origin = _resolve_server(server, http_mode)
+    curation_plan = _load_plan(plan)
     try:
-        asyncio.run(serve_overlay(origin, load_plan(plan)))
+        asyncio.run(serve_overlay(origin, curation_plan))
     except InvalidPlanError as exc:
         typer.echo(f"error: curation plan is not valid for this origin: {exc}", err=True)
         raise typer.Exit(code=1) from exc

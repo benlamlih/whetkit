@@ -303,6 +303,73 @@ def test_diff_missing_file_is_friendly(tmp_path: Path) -> None:
     assert "no summary file" in result.output
 
 
+def test_diff_rejects_non_summary_json(tmp_path: Path) -> None:
+    # a valid JSON file that is not a --summary-json output (e.g. report.json)
+    wrong = tmp_path / "report.json"
+    wrong.write_text(json.dumps({"title": "whetkit report", "tasks": []}))
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"runs": [{"hit_rate": 1.0, "tasks": [{"id": "t", "hit": True}]}]}))
+
+    result = runner.invoke(app, ["diff", str(wrong), str(good)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    text = plain(result.output)
+    assert "report.json" in text  # names WHICH file is wrong
+    assert "not a 'whetkit run --summary-json' output" in text
+
+
+def test_diff_rejects_invalid_json(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    result = runner.invoke(app, ["diff", str(bad), str(bad)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "invalid JSON" in plain(result.output)
+
+
+def test_bad_tasks_path_is_a_clean_error_everywhere(tmp_path: Path) -> None:
+    for command in ("run", "curate", "fix", "report"):
+        result = runner.invoke(app, [command, "--tasks", str(tmp_path / "nope.yaml")])
+        assert result.exit_code == 2, (command, result.output)
+        assert "Traceback" not in result.output, command
+        assert "nope.yaml" in plain(result.output), command
+        assert "no such file" in plain(result.output), command
+
+
+def test_invalid_task_yaml_is_a_clean_error(tmp_path: Path) -> None:
+    tasks = tmp_path / "broken.yaml"
+    tasks.write_text("id: [unclosed\nprompt: {{{{\n")  # not valid YAML
+    result = runner.invoke(app, ["run", "--tasks", str(tasks)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "broken.yaml" in plain(result.output)
+
+
+def test_task_missing_required_field_is_a_clean_error(tmp_path: Path) -> None:
+    tasks = tmp_path / "task.yaml"
+    tasks.write_text(
+        f"id: add-two\nserver: {FIXTURES / 'mini_server.py'}\n"
+        f"expected_tools: [add]\nsuccess_criteria: says 5\n"  # no prompt
+    )
+    result = runner.invoke(app, ["run", "--tasks", str(tasks)])
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    text = plain(result.output)
+    assert "task.yaml" in text and "prompt" in text
+
+
+def test_unparseable_plan_is_a_clean_error(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.yaml"
+    plan.write_text("overrides: [unclosed\n")
+    result = runner.invoke(
+        app,
+        ["run", "--tasks", str(_mini_task_file(tmp_path)), "--plan", str(plan)],
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "cannot load curation plan" in plain(result.output)
+
+
 def test_diff_renders_dash_when_judging_was_absent(tmp_path: Path) -> None:
     def doc(judge_rate: float | None):
         return {
