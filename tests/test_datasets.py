@@ -66,6 +66,24 @@ def test_invalid_tasks_rejected(tmp_path: Path, mutation: str, match: str) -> No
         load_tasks(file)
 
 
+def test_unknown_field_rejected_with_suggestion(tmp_path: Path) -> None:
+    file = tmp_path / "task.yaml"
+    file.write_text(VALID + "orderd: true\n")  # typo of 'ordered'
+    with pytest.raises(ValueError) as exc_info:
+        load_tasks(file)
+    message = str(exc_info.value)
+    assert str(file) in message
+    assert "unknown field 'orderd'" in message
+    assert "did you mean one of:" in message and "ordered" in message
+
+
+def test_unknown_field_without_close_match_lists_valid_fields(tmp_path: Path) -> None:
+    file = tmp_path / "task.yaml"
+    file.write_text(VALID + "zzz_bogus: 1\n")
+    with pytest.raises(ValueError, match="unknown field 'zzz_bogus'"):
+        load_tasks(file)
+
+
 def test_duplicate_ids_rejected(tmp_path: Path) -> None:
     (tmp_path / "a.yaml").write_text(VALID)
     (tmp_path / "b.yaml").write_text(VALID)
