@@ -842,6 +842,85 @@ def test_run_plan_warns_when_plan_hides_task_required_tools(tmp_path: Path, monk
     assert "'add-two' expects it" in text
 
 
+def _seed_before_after_traces(store_path: Path, task_id: str) -> None:
+    from whetkit.tracing import TaskRun, TraceStore
+
+    with TraceStore(store_path) as store:
+        store.save_runs([TaskRun(task_id=task_id, server="s", model="m")], run_group="baseline")
+        store.save_runs([TaskRun(task_id=task_id, server="s", model="m")], run_group="curated")
+
+
+def test_report_recomputes_tool_counts_from_the_server(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    store_path = tmp_path / "traces.sqlite3"
+    _seed_before_after_traces(store_path, "order-status")
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(
+        CurationPlan(overrides=[ToolOverride(original_name="do_thing", hidden=True)]), plan_path
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--tasks",
+            str(Path(__file__).parent.parent / "examples" / "tasks"),
+            "--plan",
+            str(plan_path),
+            "--store",
+            str(store_path),
+            "--judge",
+            "off",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert report["tools_before"] == 14  # re-inspected from the sample server
+    assert report["tools_after"] == 13  # 14 minus the hidden do_thing
+
+
+def test_report_tool_counts_stay_none_when_server_unreachable(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    tasks = tmp_path / "task.yaml"
+    tasks.write_text(
+        "id: ghost\n"
+        "prompt: p\n"
+        "server: does-not-exist-server\n"
+        "expected_tools: [t]\n"
+        "success_criteria: c\n"
+    )
+    store_path = tmp_path / "traces.sqlite3"
+    _seed_before_after_traces(store_path, "ghost")
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(CurationPlan(), plan_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            "--tasks",
+            str(tasks),
+            "--plan",
+            str(plan_path),
+            "--store",
+            str(store_path),
+            "--judge",
+            "off",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert report["tools_before"] is None and report["tools_after"] is None
+
+
 def test_run_missing_provider_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _forbid_agent_runs(monkeypatch)  # preflight must refuse before the agent loop

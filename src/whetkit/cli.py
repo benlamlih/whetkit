@@ -1423,6 +1423,19 @@ def report(
         finally:
             cache.close()
 
+        # Best-effort tool counts: re-inspect the tasks' server so the rebuilt
+        # report keeps the TOOLS EXPOSED metric. An unreachable server just
+        # leaves the counts off the report, exactly as before.
+        tools_before = tools_after = None
+        try:
+            origin_spec = resolve_server_spec(task_list[0].server)
+            inventory = await inspect_server(origin_spec)
+            origin_names = {t.name for t in inventory.tools}
+            tools_before = inventory.tool_count
+            tools_after = len(curation_plan.presented_to_original(origin_names))
+        except Exception:
+            pass
+
         comparison = build_report(
             task_list,
             before_runs,
@@ -1432,6 +1445,8 @@ def report(
             curation_plan,
             model=before_runs[0].model if before_runs else "",
             server=before_runs[0].server if before_runs else "",
+            tools_before=tools_before,
+            tools_after=tools_after,
         )
         html_path, json_path = _write_report(comparison, out)
         typer.echo(
