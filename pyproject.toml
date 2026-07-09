@@ -31,7 +31,7 @@ classifiers = [
 dependencies = [
     "mcp==1.28.1",
     "anthropic==0.116.0",
-    "openai==2.44.0",
+    "openai==2.45.0",
     "pydantic==2.13.4",
     "pyyaml==6.0.3",
     "typer==0.26.8",
