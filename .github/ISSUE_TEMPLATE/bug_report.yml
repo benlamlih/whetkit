@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in whetkit misbehaves, crashes, or reports wrong numbers
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Security problems should NOT go here — see
+        [SECURITY.md](../../blob/main/SECURITY.md) for private reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, what did you get instead?
+      placeholder: |
+        Ran `whetkit run --server ... --tasks ...` and ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal commands (and task/plan YAML if relevant) to reproduce.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: whetkit version
+      description: Output of `whetkit --version` (mention if you run from source/main).
+      placeholder: whetkit 0.7.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Python version.
+      placeholder: macOS 15 / Python 3.13.12
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        Paste the full command output (redact API keys and anything sensitive).
+        `WHETKIT_SERVER_LOGS=1` shows stdio server logs if the server won't start.
+      render: text

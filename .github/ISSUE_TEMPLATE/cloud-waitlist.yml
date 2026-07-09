@@ -1,0 +1,33 @@
+name: ☁ Cloud waitlist
+description: Join the waitlist for whetkit Cloud (hosted history, team dashboards, CI gating)
+title: "☁ Cloud waitlist"
+labels: [cloud-waitlist]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        whetkit Cloud is being explored: hosted run history, team dashboards,
+        and CI gating on top of the local CLI. Filing this issue adds you to
+        the waitlist — we'll follow up here.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context (optional)
+      description: |
+        Anything you'd like to share: team size, MCP servers you evaluate,
+        how you run whetkit today (locally, in CI, ...).
+    validations:
+      required: false
+  - type: dropdown
+    id: would-pay-for
+    attributes:
+      label: What would you pay for?
+      description: Pick the capability you'd most likely pay for.
+      options:
+        - hosted history
+        - CI gating
+        - team dashboards
+        - multi-model matrix
+        - other
+    validations:
+      required: true
