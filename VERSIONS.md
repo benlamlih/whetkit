@@ -9,8 +9,8 @@ release exists.
 
 | Tool | Version | Checked | Source | Notes |
 |---|---|---|---|---|
-| Python | 3.13 (3.13.12 locally) | 2026-07-07 | `uv python list` / python.org | 3.14.x is current stable upstream, but the environment's uv (0.8.17) only offers 3.14.0rc2 (pre-release). 3.13 is the conservative, broadly supported choice; every pinned dependency supports it. Recorded in `.python-version`. |
-| uv | 0.8.17 | 2026-07-07 | `uv --version` (preinstalled) | Package/env manager. Build backend pinned to matching `uv_build>=0.8.17,<0.9.0`. |
+| Python | 3.13 (3.13.12 locally) | 2026-07-09 | `uv run python --version` / python.org | 3.14.x is current stable upstream, but the environment's uv (0.8.17) only offers 3.14.0rc2 (pre-release). 3.13 is the conservative, broadly supported choice; every pinned dependency supports it. Recorded in `.python-version`. |
+| uv | 0.8.17 | 2026-07-09 | `uv --version` (preinstalled) | Package/env manager. Build backend pinned to matching `uv_build>=0.8.17,<0.9.0`. |
 
 ## Runtime dependencies (pinned in `pyproject.toml`)
 
