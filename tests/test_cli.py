@@ -604,6 +604,7 @@ def test_fix_runs_repeats_evals_and_reports_mean_range(tmp_path: Path, monkeypat
     assert result.exit_code == 0, result.output
     assert _agent_run_count(agent) == 4  # 2 baseline reps + 2 curated reps
     assert "Hit-rate: 50% [0%–100%] -> 100%" in result.output
+    assert "Tokens in/out:" in result.output  # cost/usage line, like run and curate
     with TraceStore(store_path) as store:
         groups = {g["run_group"] for g in store.list_groups()}
     assert groups == {"baseline-1", "baseline-2", "fix-1-1", "fix-1-2"}
@@ -730,6 +731,115 @@ def test_run_flags_timed_out_tasks_in_summary(tmp_path: Path, monkeypatch) -> No
     assert "Timed-out runs: 1/1" in result.output
     assert "Raise --task-timeout" in result.output
     assert "1 task run(s) errored — exit 3" in plain(result.output)
+
+
+def test_curate_drops_optimizer_hides_of_task_required_tools(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import load_plan
+
+    monkeypatch.chdir(tmp_path)
+    agent = _patch_agent_provider(monkeypatch, _agent_turns_hit() + _agent_turns_hit())
+    # the optimizer tries to hide 'add' — the only tool task add-two requires
+    _patch_optimizer_provider(
+        monkeypatch,
+        overrides=[{"original_name": "add", "action": "prune", "reason": "noise"}],
+    )
+
+    plan_path = tmp_path / "plan.yaml"
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:claude-sonnet-5",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(tmp_path / "traces.sqlite3"),
+            "--plan",
+            str(plan_path),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert _agent_run_count(agent) == 2
+    assert "kept add: required by task add-two" in plain(result.output)
+    plan = load_plan(plan_path)
+    assert not any(o.hidden for o in plan.overrides)  # the hide was dropped
+    # the estimated cost line run already prints is now part of curate too
+    assert "Tokens in/out:" in result.output
+    assert "≈ $" in result.output  # fake:claude-sonnet-5 has a known price
+
+
+def test_curate_regression_exits_4_with_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    # baseline hits, curated misses -> 100% -> 0% regression
+    _patch_agent_provider(monkeypatch, _agent_turns_hit() + _agent_turns_miss())
+    _patch_optimizer_provider(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "curate",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--optimizer-model",
+            "fake:opt",
+            "--store",
+            str(tmp_path / "traces.sqlite3"),
+            "--plan",
+            str(tmp_path / "plan.yaml"),
+            "--report-dir",
+            str(tmp_path / "report"),
+        ],
+    )
+    assert result.exit_code == 4, result.output
+    text = plain(result.output)
+    assert "REGRESSION: the curated view scored LOWER than baseline (100% -> 0%)" in text
+    assert "Do not adopt this plan" in text
+    assert "'whetkit fix'" in text and "'whetkit run --plan'" in text
+    # the full summary still printed before the failure exit
+    assert "Report:" in result.output
+
+
+def test_run_plan_warns_when_plan_hides_task_required_tools(tmp_path: Path, monkeypatch) -> None:
+    from whetkit.curation import CurationPlan, ToolOverride, save_plan
+
+    monkeypatch.chdir(tmp_path)
+    _patch_agent_provider(monkeypatch, _agent_turns_miss())
+    plan_path = tmp_path / "plan.yaml"
+    save_plan(
+        CurationPlan(overrides=[ToolOverride(original_name="add", hidden=True)]),
+        plan_path,
+    )
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--plan",
+            str(plan_path),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output  # warn only — the plan is the user's
+    text = plain(result.output)
+    assert "plan hides 'add'" in text
+    assert "'add-two' expects it" in text
 
 
 def test_run_missing_provider_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:

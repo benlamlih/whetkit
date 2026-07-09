@@ -231,6 +231,70 @@ def _echo_run_errors(task_runs: list) -> None:
             typer.echo(f"  ⚠ {task_run.task_id}: {task_run.error}", err=True)
 
 
+def _task_required_tools(task_list: list) -> dict[str, str]:
+    """Every tool named in any task's expected_tools, mapped to the first
+    task id that requires it."""
+    required: dict[str, str] = {}
+    for task in task_list:
+        for slot in task.expected_tool_slots:
+            for name in slot:
+                required.setdefault(name, task.id)
+    return required
+
+
+def _drop_task_breaking_hides(plan, task_list: list) -> list[str]:
+    """Remove hidden overrides that would break the task set.
+
+    An optimizer that hides a tool some task's expected_tools require
+    guarantees the regression it then measures — a deterministic cross-check
+    catches it before the curated eval spends anything. Renames are fine
+    (rename_map already handles scoring). Returns the warnings to print.
+    """
+    required = _task_required_tools(task_list)
+    warnings: list[str] = []
+    kept = []
+    for override in plan.overrides:
+        if override.hidden and override.original_name in required:
+            warnings.append(
+                f"kept {override.original_name}: required by task "
+                f"{required[override.original_name]} (dropped the plan's hide)"
+            )
+            continue
+        kept.append(override)
+    plan.overrides = kept
+    return warnings
+
+
+def _warn_plan_hides_required_tools(plan, task_list: list) -> None:
+    """run --plan keeps the user's plan untouched, but a plan that hides a
+    tool the tasks require deserves a loud heads-up before the eval runs."""
+    required = _task_required_tools(task_list)
+    for override in plan.overrides:
+        if override.hidden and override.original_name in required:
+            typer.echo(
+                f"warning: plan hides {override.original_name!r} but task "
+                f"{required[override.original_name]!r} expects it — that task "
+                "can only miss through this view",
+                err=True,
+            )
+
+
+def _usage_cost_line(model: str, task_runs: list) -> str:
+    """Token totals, wall-clock latency, and the estimated $ cost of the runs."""
+    from whetkit.llm import parse_model
+    from whetkit.llm.pricing import estimate_cost_usd
+
+    tokens_in = sum(r.total_usage.input_tokens for r in task_runs)
+    tokens_out = sum(r.total_usage.output_tokens for r in task_runs)
+    cost = estimate_cost_usd(parse_model(model)[1], tokens_in, tokens_out)
+    cost_note = f"   ≈ ${cost:.4f} (est.)" if cost is not None else ""
+    return (
+        f"Tokens in/out: {tokens_in}/{tokens_out}   "
+        f"Total latency: {sum(r.total_latency_ms for r in task_runs) / 1000:.1f}s"
+        f"{cost_note}"
+    )
+
+
 def _version_callback(value: bool) -> None:
     if value:
         from importlib.metadata import version
@@ -720,6 +784,7 @@ def run(
         if not Path(plan).is_file():
             raise typer.BadParameter(f"no curation plan at {plan}")
         curation_plan = load_plan(plan)
+        _warn_plan_hides_required_tools(curation_plan, task_list)
         client_factory = partial(CuratedMCPClient, plan=curation_plan)
         name_map = curation_plan.rename_map()
         # Validate the plan against every origin's live tool list before
@@ -781,18 +846,7 @@ def run(
                 )
         for line in summary.summary_lines():
             typer.echo(line)
-        tokens_in = sum(r.total_usage.input_tokens for r in task_runs)
-        tokens_out = sum(r.total_usage.output_tokens for r in task_runs)
-        from whetkit.llm import parse_model
-        from whetkit.llm.pricing import estimate_cost_usd
-
-        cost = estimate_cost_usd(parse_model(model)[1], tokens_in, tokens_out)
-        cost_note = f"   ≈ ${cost:.4f} (est.)" if cost is not None else ""
-        typer.echo(
-            f"Tokens in/out: {tokens_in}/{tokens_out}   "
-            f"Total latency: {sum(r.total_latency_ms for r in task_runs) / 1000:.1f}s"
-            f"{cost_note}"
-        )
+        typer.echo(_usage_cost_line(model, task_runs))
         return task_runs, summary
 
     async def _run() -> None:
@@ -993,6 +1047,8 @@ def curate(
             )
             for warning in warnings:
                 typer.echo(f"warning: {warning}", err=True)
+            for warning in _drop_task_breaking_hides(plan, task_list):
+                typer.echo(f"warning: {warning}", err=True)
             if prune_unused:
                 every_baseline_run = [r for rep in baseline_all for r in rep]
                 pruned = apply_prune_unused(plan, inventory, task_list, every_baseline_run)
@@ -1067,6 +1123,8 @@ def curate(
             f"Tools: {report.tools_before} -> {report.tools_after}   "
             f"Tokens/task: {tok_before} -> {tok_after}"
         )
+        all_task_runs = [r for rep in baseline_all + curated_all for r in rep]
+        typer.echo(_usage_cost_line(model, all_task_runs))
         typer.echo(
             f"Traces saved to {store_path} (groups {_group_family_note('baseline', runs)}, "
             f"{_group_family_note('curated', runs)})"
@@ -1074,6 +1132,15 @@ def curate(
         typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
         _exit_on_errored_runs(baseline_summaries + curated_summaries)
+        if curated_multi.mean_hit_rate < baseline_multi.mean_hit_rate:
+            typer.echo(
+                f"\n⚠ REGRESSION: the curated view scored LOWER than baseline "
+                f"({baseline_multi.mean_hit_rate:.0%} -> {curated_multi.mean_hit_rate:.0%}). "
+                "Do not adopt this plan. Try 'whetkit fix' (iterative self-correction) "
+                "or edit the plan and re-score with 'whetkit run --plan'.",
+                err=True,
+            )
+            raise typer.Exit(code=4)
 
     _require_provider_keys(
         {
@@ -1196,6 +1263,7 @@ def fix(
             typer.echo("== baseline ==", err=True)
             baseline_all, baseline_summaries = await _eval("baseline")
             all_summaries = list(baseline_summaries)
+            spent_runs = [r for rep in baseline_all for r in rep]
             baseline_multi = MultiRunSummary(summaries=baseline_summaries)
             inventory = await _inspect(curation_spec)
 
@@ -1208,7 +1276,7 @@ def fix(
                 baseline_summaries[0].scores,
                 optimizer_config,
             )
-            for w in warnings:
+            for w in warnings + _drop_task_breaking_hides(plan, task_list):
                 typer.echo(f"warning: {w}", err=True)
 
             def metric(multi):
@@ -1223,6 +1291,7 @@ def fix(
                     name_map=plan.rename_map(),
                 )
                 all_summaries.extend(curated_summaries)
+                spent_runs.extend(r for rep in curated_all for r in rep)
                 curated_multi = MultiRunSummary(summaries=curated_summaries)
                 typer.echo(
                     f"iteration {iteration}: hit {curated_multi.hit_rate_spread()} "
@@ -1253,7 +1322,7 @@ def fix(
                     curated_summaries[0].scores,
                     optimizer_config,
                 )
-                for w in warnings:
+                for w in warnings + _drop_task_breaking_hides(plan, task_list):
                     typer.echo(f"warning: {w}", err=True)
         finally:
             cache.close()
@@ -1265,6 +1334,7 @@ def fix(
             f"Extra calls: {baseline_multi.mean_avg_extra_calls:.1f} -> "
             f"{best_multi.mean_avg_extra_calls:.1f}/task"
         )
+        typer.echo(_usage_cost_line(model, spent_runs))
         typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
 
         _exit_on_errored_runs(all_summaries)
