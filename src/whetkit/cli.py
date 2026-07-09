@@ -323,6 +323,12 @@ def _usage_cost_line(model: str, task_runs: list) -> str:
     )
 
 
+_CLOUD_WAITLIST_LINE = (
+    "☁ whetkit Cloud (hosted history, team dashboards, CI gating) — join the "
+    "waitlist: https://github.com/benlamlih/whetkit/issues/new?template=cloud-waitlist.yml"
+)
+
+
 def _version_callback(value: bool) -> None:
     if value:
         from importlib.metadata import version
@@ -333,6 +339,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option(
@@ -344,6 +351,12 @@ def main(
     ] = False,
 ) -> None:
     """Evaluate and improve LLM agent tool selection on MCP servers."""
+    # Opt-in anonymous telemetry: one event naming the command (nothing else),
+    # only when the user enabled it. See `whetkit telemetry status`.
+    if ctx.invoked_subcommand and ctx.invoked_subcommand != "telemetry":
+        from whetkit import telemetry as _telemetry
+
+        _telemetry.record_event(ctx.invoked_subcommand)
 
 
 @app.command()
@@ -950,6 +963,7 @@ def run(
             Path(summary_json).write_text(jsonlib.dumps(document, indent=2) + "\n")
             typer.echo(f"Summary JSON: {summary_json}")
 
+        typer.echo(_CLOUD_WAITLIST_LINE, err=True)
         _exit_on_errored_runs(summaries)
 
     _require_provider_keys(
@@ -1173,6 +1187,7 @@ def curate(
         )
         typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
+        typer.echo(_CLOUD_WAITLIST_LINE, err=True)
         _exit_on_errored_runs(baseline_summaries + curated_summaries)
         if curated_multi.mean_hit_rate < baseline_multi.mean_hit_rate:
             typer.echo(
@@ -1378,6 +1393,7 @@ def fix(
         typer.echo(_usage_cost_line(model, spent_runs))
         typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
 
+        typer.echo(_CLOUD_WAITLIST_LINE, err=True)
         _exit_on_errored_runs(all_summaries)
 
     _require_provider_keys(
@@ -1517,6 +1533,43 @@ def overlay(
     except InvalidPlanError as exc:
         typer.echo(f"error: curation plan is not valid for this origin: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def telemetry(
+    action: Annotated[
+        str, typer.Argument(help="'on' or 'off' to opt in/out, 'status' to inspect")
+    ] = "status",
+) -> None:
+    """Manage opt-in anonymous usage telemetry (off by default)."""
+    import uuid
+
+    from whetkit import telemetry as tel
+
+    if action not in ("on", "off", "status"):
+        raise typer.BadParameter("action must be 'on', 'off', or 'status'")
+
+    if action in ("on", "off"):
+        config = tel.load_config()
+        config["enabled"] = action == "on"
+        if action == "on" and not config.get("anonymous_id"):
+            config["anonymous_id"] = str(uuid.uuid4())
+        tel.save_config(config)
+        state = "enabled" if action == "on" else "disabled"
+        typer.echo(f"telemetry {state} — recorded in {tel.config_path()}")
+    else:
+        env = os.environ.get("WHETKIT_TELEMETRY")
+        state = "enabled" if tel.is_enabled() else "disabled"
+        source = (
+            f"WHETKIT_TELEMETRY={env} (env var overrides the config file)"
+            if env is not None
+            else f"{tel.config_path()}"
+        )
+        typer.echo(f"telemetry is {state}  [{source}]")
+
+    typer.echo(f"when enabled, each command sends exactly: {tel.COLLECTED}.")
+    typer.echo(f"never collected: {tel.NEVER_COLLECTED}.")
+    typer.echo("toggle with 'whetkit telemetry on|off' or WHETKIT_TELEMETRY=1|0.")
 
 
 if __name__ == "__main__":

@@ -1120,6 +1120,9 @@ def test_run_happy_path_still_exits_0(tmp_path: Path, monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "Hit-rate: 100%" in result.output
+    # the Cloud waitlist hint prints after the summary
+    assert "whetkit Cloud" in result.output
+    assert "issues/new?template=cloud-waitlist.yml" in result.output
 
 
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:
