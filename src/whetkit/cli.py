@@ -24,12 +24,39 @@ def _resolve_server(value: str, http_mode: HttpMode) -> ServerSpec:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _judge_key_var(judge_model: str) -> str | None:
-    """The env var that holds the judge provider's API key."""
+_PROVIDER_KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def _provider_key_var(model: str) -> str | None:
+    """The env var that holds this model's provider API key (None if unknown)."""
     from whetkit.llm import parse_model
 
-    provider_name, _ = parse_model(judge_model)
-    return {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}.get(provider_name)
+    try:
+        provider_name, _ = parse_model(model)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    return _PROVIDER_KEY_VARS.get(provider_name)
+
+
+def _require_provider_keys(models: dict[str, str]) -> None:
+    """Fail fast — before any eval spend — when a provider API key is missing.
+
+    ``models`` maps a role label ('agent model', 'judge model', ...) to its
+    provider:model string. A missing key today surfaces only after paid/timed
+    runs as 0% scores; refusing up front is the honest behavior.
+    """
+    for role, model in models.items():
+        key_var = _provider_key_var(model)
+        if key_var and not os.environ.get(key_var):
+            raise typer.BadParameter(
+                f"{key_var} is not set — required by the {role} {model!r}. "
+                f"Export {key_var} (or pick a different provider)."
+            )
+
+
+def _judge_key_var(judge_model: str) -> str | None:
+    """The env var that holds the judge provider's API key."""
+    return _provider_key_var(judge_model)
 
 
 def _judge_enabled(judge: str, judge_model: str) -> bool:
@@ -183,6 +210,27 @@ def _group_family_note(base_group: str, runs: int) -> str:
     return f"'{base_group}-1'..'-{runs}'" if runs > 1 else f"'{base_group}'"
 
 
+def _exit_on_errored_runs(summaries: list) -> None:
+    """Exit 3 when any task run ERRORed or TIMEOUTed: those scores measure the
+    infrastructure, not tool selection, and CI must not stay green on them.
+    Called after the full summary has been printed."""
+    failed = sum(s.error_run_count + s.timeout_run_count for s in summaries)
+    if failed:
+        typer.echo(
+            f"{failed} task run(s) errored — exit 3 "
+            "(infrastructure failure, not a tool-selection result)",
+            err=True,
+        )
+        raise typer.Exit(code=3)
+
+
+def _echo_run_errors(task_runs: list) -> None:
+    """Surface each failed run's real error (it otherwise hides in the trace DB)."""
+    for task_run in task_runs:
+        if task_run.error:
+            typer.echo(f"  ⚠ {task_run.task_id}: {task_run.error}", err=True)
+
+
 def _version_callback(value: bool) -> None:
     if value:
         from importlib.metadata import version
@@ -326,6 +374,7 @@ def generate(
     trusting — the header in the output file says the same)."""
     from whetkit.generate import GeneratorConfig, generate_tasks, write_tasks_yaml
 
+    _require_provider_keys({"generator model": model})
     spec = _resolve_server(server, http_mode)
     inventory = asyncio.run(inspect_server(spec))
     tasks, warnings = asyncio.run(
@@ -720,6 +769,7 @@ def run(
             if score.judge is not None:
                 line += f"  judge={'pass' if score.judge.passed else 'FAIL'}"
             typer.echo(line)
+        _echo_run_errors(task_runs)
         typer.echo("")
         for score in summary.scores:
             if score.spec_gap:
@@ -803,6 +853,11 @@ def run(
             Path(summary_json).write_text(jsonlib.dumps(document, indent=2) + "\n")
             typer.echo(f"Summary JSON: {summary_json}")
 
+        _exit_on_errored_runs(summaries)
+
+    _require_provider_keys(
+        {"agent model": model, **({"judge model": judge_model} if use_judge else {})}
+    )
     asyncio.run(_run())
 
 
@@ -1018,6 +1073,15 @@ def curate(
         )
         typer.echo(f"Report: {html_path} (machine-readable: {json_path})")
 
+        _exit_on_errored_runs(baseline_summaries + curated_summaries)
+
+    _require_provider_keys(
+        {
+            "agent model": model,
+            "optimizer model": optimizer_model,
+            **({"judge model": judge_model} if use_judge else {}),
+        }
+    )
     asyncio.run(_curate())
 
 
@@ -1131,6 +1195,7 @@ def fix(
         try:
             typer.echo("== baseline ==", err=True)
             baseline_all, baseline_summaries = await _eval("baseline")
+            all_summaries = list(baseline_summaries)
             baseline_multi = MultiRunSummary(summaries=baseline_summaries)
             inventory = await _inspect(curation_spec)
 
@@ -1157,6 +1222,7 @@ def fix(
                     client_factory=partial(CuratedMCPClient, plan=plan),
                     name_map=plan.rename_map(),
                 )
+                all_summaries.extend(curated_summaries)
                 curated_multi = MultiRunSummary(summaries=curated_summaries)
                 typer.echo(
                     f"iteration {iteration}: hit {curated_multi.hit_rate_spread()} "
@@ -1201,6 +1267,15 @@ def fix(
         )
         typer.echo(f"serve it:  whetkit overlay --server <origin> --plan {plan_path}")
 
+        _exit_on_errored_runs(all_summaries)
+
+    _require_provider_keys(
+        {
+            "agent model": model,
+            "optimizer model": optimizer_model,
+            **({"judge model": judge_model} if use_judge else {}),
+        }
+    )
     asyncio.run(_fix())
 
 

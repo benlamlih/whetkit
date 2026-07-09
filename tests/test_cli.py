@@ -338,7 +338,9 @@ def test_diff_renders_dash_when_judging_was_absent(tmp_path: Path) -> None:
     assert "—" in line and "100%" in line
 
 
-def test_reset_cmd_failure_is_friendly(tmp_path: Path) -> None:
+def test_reset_cmd_failure_is_friendly(tmp_path: Path, monkeypatch) -> None:
+    # a dummy key so the provider preflight passes; --reset-cmd fails before any run
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-not-a-real-key")
     result = runner.invoke(
         app,
         [
@@ -722,9 +724,146 @@ def test_run_flags_timed_out_tasks_in_summary(tmp_path: Path, monkeypatch) -> No
             str(tmp_path / "t.sqlite3"),
         ],
     )
-    assert result.exit_code == 0, result.output
+    # the summary is still printed in full, but a timed-out run is an
+    # infrastructure failure — the command must not exit 0
+    assert result.exit_code == 3, result.output
     assert "Timed-out runs: 1/1" in result.output
     assert "Raise --task-timeout" in result.output
+    assert "1 task run(s) errored — exit 3" in plain(result.output)
+
+
+def test_run_missing_provider_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)  # preflight must refuse before the agent loop
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "ANTHROPIC_API_KEY is not set" in plain(result.output)
+    assert "agent model" in plain(result.output)
+
+
+def test_run_missing_judge_key_fails_before_any_spend(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--model",
+            "fake:agent",
+            "--judge",
+            "on",
+            "--judge-model",
+            "openai:gpt-5.2",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "OPENAI_API_KEY is not set" in plain(result.output)
+    assert "judge model" in plain(result.output)
+
+
+def test_curate_and_fix_missing_optimizer_key_fails_before_any_spend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _forbid_agent_runs(monkeypatch)
+    for command in ("curate", "fix"):
+        result = runner.invoke(
+            app,
+            [
+                command,
+                "--tasks",
+                str(_mini_task_file(tmp_path)),
+                "--model",
+                "fake:agent",
+                "--optimizer-model",
+                "openai:gpt-5.2",
+                "--judge",
+                "off",
+                "--store",
+                str(tmp_path / "t.sqlite3"),
+            ],
+        )
+        assert result.exit_code == 2, (command, result.output)
+        assert "OPENAI_API_KEY is not set" in plain(result.output), command
+        assert "optimizer model" in plain(result.output), command
+
+
+def test_generate_missing_key_is_a_clean_error(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = runner.invoke(
+        app, ["generate", "--server", str(FIXTURES / "mini_server.py"), "--count", "1"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "Traceback" not in result.output
+    assert "ANTHROPIC_API_KEY is not set" in plain(result.output)
+
+
+def test_run_exits_3_when_runs_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    # an exhausted script makes the provider raise inside the agent loop -> ERROR run
+    _patch_agent_provider(monkeypatch, [])
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 3, result.output
+    # the full summary still prints (including the real per-run error), THEN exit 3
+    assert "Hit-rate:" in result.output
+    assert "Errored runs: 1/1" in result.output
+    assert "AssertionError" in result.output  # the underlying error is surfaced
+    assert "1 task run(s) errored — exit 3" in plain(result.output)
+    assert "infrastructure failure, not a tool-selection result" in plain(result.output)
+
+
+def test_run_happy_path_still_exits_0(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _patch_agent_provider(monkeypatch, _agent_turns_hit())
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--tasks",
+            str(_mini_task_file(tmp_path)),
+            "--judge",
+            "off",
+            "--model",
+            "fake:agent",
+            "--store",
+            str(tmp_path / "t.sqlite3"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Hit-rate: 100%" in result.output
 
 
 def test_plan_init_from_traces_keeps_called_tools(tmp_path: Path) -> None:
