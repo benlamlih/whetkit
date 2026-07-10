@@ -442,3 +442,53 @@ def share_markdown(
         "free, no API key needed._"
     )
     return "\n".join(lines)
+
+
+def discover_plugin_servers(
+    plugins_dir: str | Path,
+) -> tuple[dict[str, ServerSpec], list[str]]:
+    """MCP servers shipped by installed Claude Code plugins (read-only).
+
+    Layout (verified against a live install): ``installed_plugins.json``
+    maps ``name@marketplace`` to install records whose ``installPath`` may
+    contain a ``.mcp.json`` with the plugin's servers. These servers load
+    into the client alongside mcpServers entries but live outside the user's
+    config — the audit should see them; --apply must never touch them.
+    Never raises: a malformed registry degrades to warnings."""
+    plugins_dir = Path(plugins_dir).expanduser()
+    registry = plugins_dir / "installed_plugins.json"
+    if not registry.is_file():
+        return {}, []
+    warnings: list[str] = []
+    try:
+        document = json.loads(registry.read_text())
+        plugins = document.get("plugins") or {}
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, [f"could not read plugin registry: {exc}"]
+
+    servers: dict[str, ServerSpec] = {}
+    for plugin_name, records in plugins.items():
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            install_path = (record or {}).get("installPath")
+            if not install_path:
+                continue
+            mcp_file = Path(install_path) / ".mcp.json"
+            if not mcp_file.is_file():
+                continue
+            try:
+                entries = (json.loads(mcp_file.read_text()) or {}).get("mcpServers") or {}
+            except (OSError, json.JSONDecodeError) as exc:
+                warnings.append(f"plugin {plugin_name}: unreadable .mcp.json ({exc})")
+                continue
+            for server_name, entry in entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    spec = _entry_to_spec(entry)
+                except (ValueError, KeyError) as exc:
+                    warnings.append(f"plugin {plugin_name}.{server_name}: {exc}")
+                    continue
+                servers[f"{server_name} (plugin: {plugin_name.split('@')[0]})"] = spec
+    return servers, warnings
