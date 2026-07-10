@@ -9,6 +9,7 @@ plus a rewritten config that serves each slimmed server through
 """
 
 import json
+import shutil
 from itertools import combinations
 from pathlib import Path
 
@@ -44,6 +45,10 @@ class ClientConfig(BaseModel):
     servers: dict[str, ServerSpec]
     skipped: list[SkippedServer] = []
     raw_entries: dict[str, dict] = {}
+    standalone: bool = True
+    """False when the source file holds more than mcpServers (a full
+    ~/.claude.json with settings/projects): the slimmed output is then a
+    fragment to merge, not a drop-in replacement for the original file."""
 
 
 def _entry_to_spec(entry: dict) -> ServerSpec:
@@ -100,7 +105,14 @@ def parse_client_config(path: str | Path) -> ClientConfig:
             servers[name] = _entry_to_spec(entry)
         except (ValueError, KeyError) as exc:
             skipped.append(SkippedServer(name=name, reason=str(exc)))
-    return ClientConfig(path=str(path), servers=servers, skipped=skipped, raw_entries=merged)
+    standalone = set(document) <= {"mcpServers"}
+    return ClientConfig(
+        path=str(path),
+        servers=servers,
+        skipped=skipped,
+        raw_entries=merged,
+        standalone=standalone,
+    )
 
 
 class CrossServerDuplicate(BaseModel):
@@ -188,6 +200,27 @@ def build_dedupe_plans(
                 "Whole server hidden by --hide; delete the plan to restore."
             )
 
+    # A keeper named in a reason can itself be hidden by ANOTHER pair (ties
+    # chain: c hidden "kept b" while b is hidden "kept a"). Re-point every
+    # duplicate reason at a copy that actually stays visible.
+    def visible_holder(tool: str) -> str | None:
+        for server, inventory in inventories.items():
+            if tool in hides.get(server, {}):
+                continue
+            if any(t.name == tool for t in inventory.tools):
+                return server
+        return None
+
+    for tool_reasons in hides.values():
+        for tool, reason in list(tool_reasons.items()):
+            if not reason.startswith("Duplicate of "):
+                continue
+            survivor = visible_holder(tool)
+            if survivor is not None:
+                tool_reasons[tool] = (
+                    f"Duplicate of {survivor}.{tool} (kept there); hidden to stop split attention."
+                )
+
     plans: dict[str, CurationPlan] = {}
     for server, tool_reasons in hides.items():
         plans[server] = CurationPlan(
@@ -212,8 +245,11 @@ def write_slim_output(
     else (including skipped entries) is copied through verbatim. Env values
     are preserved as-is — they came from a config file of the same
     sensitivity. Returns the path of the slimmed config."""
-    out = Path(out_dir)
+    out = Path(out_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
+    # GUI clients (Claude Desktop) launch servers with a minimal PATH where a
+    # bare 'whetkit' often doesn't resolve — pin the absolute path when known.
+    whetkit_command = shutil.which("whetkit") or "whetkit"
 
     slimmed: dict[str, dict] = {}
     for name, raw_entry in config.raw_entries.items():
@@ -228,7 +264,7 @@ def write_slim_output(
         spec_path.write_text(config.servers[name].model_dump_json(indent=2) + "\n")
         save_plan(plan, plan_path)
         slimmed[name] = {
-            "command": "whetkit",
+            "command": whetkit_command,
             "args": [
                 "overlay",
                 "--server",

@@ -147,10 +147,16 @@ def _single_server_spec(servers: dict[str, ServerSpec], command: str) -> ServerS
     return next(iter(servers.values()))
 
 
+def _out_path(value: str) -> Path:
+    """User-supplied output path with ``~`` expanded — a literal '~' directory
+    in the CWD is never what anyone meant."""
+    return Path(value).expanduser()
+
+
 def _write_report(report, out_dir: str) -> tuple[str, str]:
     from whetkit.report import render_html
 
-    out = Path(out_dir)
+    out = _out_path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     html_path = out / "report.html"
     json_path = out / "report.json"
@@ -498,8 +504,8 @@ def generate(
         typer.echo("no valid tasks were drafted — try again or write them by hand", err=True)
         raise typer.Exit(code=1)
 
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    write_tasks_yaml(tasks, out)
+    _out_path(out).parent.mkdir(parents=True, exist_ok=True)
+    write_tasks_yaml(tasks, str(_out_path(out)))
     typer.echo(f"drafted {len(tasks)} task(s) to {out} — review them, then:")
     typer.echo(f"  whetkit run --server {server} --tasks {out}")
 
@@ -577,8 +583,8 @@ def plan_init(
         notes=f"View plan: keep {len(names & keep_set)} tool(s), hide the rest.",
         overrides=hidden,
     )
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    save_plan(plan, out)
+    _out_path(out).parent.mkdir(parents=True, exist_ok=True)
+    save_plan(plan, str(_out_path(out)))
     typer.echo(f"kept {len(names & keep_set)}, hidden {len(hidden)} — wrote {out}")
     typer.echo(f"score it:  whetkit run --server {server} --tasks <tasks> --plan {out}")
 
@@ -668,6 +674,13 @@ def slim(
     if not inventories:
         typer.echo("error: no server in the config could be inspected", err=True)
         raise typer.Exit(code=1)
+
+    for named in sorted((hide_servers | keep_servers) & set(failures)):
+        typer.echo(
+            f"warning: cannot act on {named!r} — it could not be inspected ({failures[named]})",
+            err=True,
+        )
+    hide_servers -= set(failures)
 
     duplicates = cross_server_duplicates(inventories)
     model_id = parse_model(model)[1]
@@ -760,12 +773,22 @@ def slim(
     if apply and plans:
         slimmed = write_slim_output(client_config, plans, out)
         typer.echo(f"\nwrote {slimmed}")
-        typer.echo(
-            "Point your client at the slimmed config to use it; your original "
-            f"config was not modified — reverting is switching back to {client_config.path}."
-        )
+        if client_config.standalone:
+            typer.echo(
+                "Point your client at the slimmed config to use it; your original "
+                f"config was not modified — reverting is switching back to {client_config.path}."
+            )
+        else:
+            typer.echo(
+                f"{client_config.path} holds more than mcpServers (settings, "
+                "projects), so the slimmed file is a fragment, not a drop-in "
+                "replacement: use it as a project .mcp.json, or merge its "
+                "entries into your config. Your original was not modified."
+            )
     elif apply:
-        typer.echo("\nnothing to apply — no duplicates found and no --hide servers")
+        typer.echo(
+            "\nnothing to apply — no duplicate losers or hideable servers survived the checks above"
+        )
 
 
 @app.command()
@@ -801,8 +824,8 @@ def export(
 
     rendered = (plan_to_markdown if to == "markdown" else plan_to_json)(curation_plan)
     if out:
-        Path(out).parent.mkdir(parents=True, exist_ok=True)
-        Path(out).write_text(rendered)
+        _out_path(out).parent.mkdir(parents=True, exist_ok=True)
+        _out_path(out).write_text(rendered)
         typer.echo(f"wrote {out}")
     else:
         typer.echo(rendered, nl=False)
@@ -1144,8 +1167,8 @@ def run(
                     "hit_rate_max": max(s.hit_rate for s in summaries),
                     "flaky_tasks": multi.flaky_tasks(),
                 }
-            Path(summary_json).parent.mkdir(parents=True, exist_ok=True)
-            Path(summary_json).write_text(jsonlib.dumps(document, indent=2) + "\n")
+            _out_path(summary_json).parent.mkdir(parents=True, exist_ok=True)
+            _out_path(summary_json).write_text(jsonlib.dumps(document, indent=2) + "\n")
             typer.echo(f"Summary JSON: {summary_json}")
 
         typer.echo(_CLOUD_WAITLIST_LINE, err=True)
