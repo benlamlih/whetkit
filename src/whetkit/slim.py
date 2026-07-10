@@ -76,7 +76,7 @@ def _entry_to_spec(entry: dict) -> ServerSpec:
     return spec_from_dict(data)
 
 
-def parse_client_config(path: str | Path) -> ClientConfig:
+def parse_client_config(path: str | Path, allow_empty: bool = False) -> ClientConfig:
     """Read every server out of a client config file.
 
     Accepts any JSON document with an ``mcpServers`` object; for Claude
@@ -96,7 +96,7 @@ def parse_client_config(path: str | Path) -> ClientConfig:
         if isinstance(project, dict):
             merged.update(project.get("mcpServers") or {})
     merged.update(document.get("mcpServers") or {})
-    if not merged:
+    if not merged and not allow_empty:
         raise ValueError(
             f"{path} has no mcpServers entries — nothing to audit. "
             "Point --config at a client config that declares MCP servers."
@@ -478,10 +478,19 @@ def discover_plugin_servers(
             if not mcp_file.is_file():
                 continue
             try:
-                entries = (json.loads(mcp_file.read_text()) or {}).get("mcpServers") or {}
+                document = json.loads(mcp_file.read_text()) or {}
             except (OSError, json.JSONDecodeError) as exc:
                 warnings.append(f"plugin {plugin_name}: unreadable .mcp.json ({exc})")
                 continue
+            # Two shapes exist in the wild: firebase-style {"mcpServers": {...}}
+            # and official-marketplace bare maps {"name": {command,...}, ...}.
+            entries = document.get("mcpServers")
+            if entries is None:
+                entries = {
+                    name: entry
+                    for name, entry in document.items()
+                    if isinstance(entry, dict) and ("command" in entry or "url" in entry)
+                }
             for server_name, entry in entries.items():
                 if not isinstance(entry, dict):
                     continue

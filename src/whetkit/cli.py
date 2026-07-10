@@ -687,7 +687,9 @@ def slim(
     )
 
     try:
-        client_config = parse_client_config(config)
+        # plugins can carry the whole surface: defer the nothing-to-audit
+        # decision until after plugin discovery
+        client_config = parse_client_config(config, allow_empty=True)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     for named in client_config.defer_loading_entries:
@@ -709,6 +711,11 @@ def slim(
 
     plugin_names: set[str] = set()
     all_servers = dict(client_config.servers)
+    if not all_servers and not plugins:
+        raise typer.BadParameter(
+            f"{client_config.path} has no mcpServers entries and --no-plugins "
+            "was passed — nothing to audit."
+        )
     if plugins:
         plugins_dir = os.environ.get("CLAUDE_PLUGINS_DIR") or (Path.home() / ".claude" / "plugins")
         plugin_servers, plugin_warnings = discover_plugin_servers(plugins_dir)
@@ -716,6 +723,17 @@ def slim(
             typer.echo(f"warning: {warning}", err=True)
         plugin_names = set(plugin_servers)
         all_servers.update(plugin_servers)
+        if not all_servers:
+            raise typer.BadParameter(
+                f"{client_config.path} has no mcpServers entries and no installed "
+                "plugin ships MCP servers — nothing to audit."
+            )
+        if not client_config.servers and plugin_names:
+            typer.echo(
+                "note: this config declares no mcpServers — auditing the "
+                "plugin-provided surface only",
+                err=True,
+            )
 
     async def _inventories() -> tuple[dict, dict[str, str]]:
         inventories: dict = {}
