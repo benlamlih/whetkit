@@ -633,6 +633,13 @@ def slim(
         str,
         typer.Option("--hide", help="Comma-separated server names to hide entirely"),
     ] = "",
+    share: Annotated[
+        bool,
+        typer.Option(
+            "--share",
+            help="Also print a copy-pasteable markdown snippet of the audit (with badge)",
+        ),
+    ] = False,
     recommend_hot: Annotated[
         bool,
         typer.Option(
@@ -663,6 +670,7 @@ def slim(
         cross_server_duplicates,
         parse_client_config,
         recommend_hot_servers,
+        share_markdown,
         write_hot_config,
         write_slim_output,
     )
@@ -766,6 +774,15 @@ def slim(
                 err=True,
             )
 
+    snippet = share_markdown(
+        client_config.path,
+        [(name, inv.tool_count, inv.total_definition_tokens) for name, inv in inventories.items()],
+        total_tokens,
+        per_message,
+        after_tokens if plans else None,
+        after_cost if plans else None,
+    )
+
     if json_out:
         import json as jsonlib
 
@@ -790,6 +807,7 @@ def slim(
             "always_load": client_config.always_load,
             "defer_loading_ignored": client_config.defer_loading_entries,
             "hot_recommendation": hot_recommendation,
+            "share_markdown": snippet,
             "plan_servers": sorted(plans),
             "after_definition_tokens": after_tokens if plans else None,
             "after_cost_per_message_usd": after_cost if plans else None,
@@ -857,6 +875,11 @@ def slim(
                 f"{len(plans)} server(s) -> ~{after_tokens} tokens"
                 + (f", ${after_cost:.4f}/message" if after_cost is not None else "")
             )
+
+    if share and not json_out:
+        typer.echo("\n--- copy below ---")
+        typer.echo(snippet)
+        typer.echo("--- copy above ---")
 
     if apply and hot_recommendation is not None:
         hot_path = write_hot_config(client_config, set(hot_recommendation["hot"]), out)

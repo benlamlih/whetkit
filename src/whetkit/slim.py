@@ -392,3 +392,53 @@ def write_hot_config(config: ClientConfig, hot: set[str], out_dir: str | Path) -
     path = out / "hot.mcp.json"
     path.write_text(json.dumps({"mcpServers": stamped}, indent=2) + "\n")
     return path
+
+
+def badge_url(cost_per_1k: float) -> str:
+    """shields.io static badge for the per-1k-messages context bill."""
+    label = f"${cost_per_1k:.2f}%2F1k msgs".replace(" ", "_")
+    return f"https://img.shields.io/badge/MCP_context-{label}-blue"
+
+
+def share_markdown(
+    config_path: str,
+    server_rows: list[tuple[str, int, int]],
+    total_tokens: int,
+    cost_per_message: float | None,
+    after_tokens: int | None = None,
+    after_cost: float | None = None,
+) -> str:
+    """A copy-pasteable GitHub-flavored snippet of the audit — the number
+    people screenshot, as text they can paste instead."""
+
+    def cell(value: str) -> str:
+        return value.replace("|", "\\|")
+
+    lines = [
+        "### My MCP tool-surface bill",
+        "",
+        "| Server | Tools | Definition tokens |",
+        "|---|---:|---:|",
+    ]
+    for name, tools, tokens in server_rows:
+        lines.append(f"| {cell(name)} | {tools} | {tokens} |")
+    lines.append("")
+    summary = f"**Union: ~{total_tokens} tokens with every message**"
+    if cost_per_message is not None:
+        summary += f" — ≈ ${cost_per_message * 1000:.2f} per 1,000 messages"
+    lines.append(summary)
+    if after_tokens is not None and after_tokens != total_tokens:
+        after_line = f"After `whetkit slim`: ~{after_tokens} tokens"
+        if after_cost is not None:
+            after_line += f" (≈ ${after_cost * 1000:.2f}/1k msgs)"
+        pct = 100 * (total_tokens - after_tokens) / total_tokens if total_tokens else 0
+        lines.append(f"{after_line} — **{pct:.0f}% lighter**")
+    if cost_per_message is not None:
+        lines.append("")
+        lines.append(f"![MCP context]({badge_url(cost_per_message * 1000)})")
+    lines.append("")
+    lines.append(
+        "_Audited with [`whetkit slim`](https://github.com/benlamlih/whetkit) — "
+        "free, no API key needed._"
+    )
+    return "\n".join(lines)
