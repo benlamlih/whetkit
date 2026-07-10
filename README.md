@@ -22,11 +22,12 @@ surface, applies it through a reversible proxy, and re-runs the same evals to
 quantify the improvement.
 
 ```text
-whetkit doctor    ──►  ten-second lint of the tool surface        (no tasks, no API key)
+whetkit slim      ──►  audit your CLIENT config's union tool bill  (no tasks, no API key)
+whetkit doctor    ──►  ten-second lint of one server's surface     (no tasks, no API key)
 whetkit inspect   ──►  what does the agent actually see?
-whetkit generate  ──►  draft eval tasks from the inventory        (review, then run)
-whetkit run       ──►  how often does it pick the right tools?   (hit-rate)
-whetkit curate    ──►  fix the tool set, prove it helped          (before → after)
+whetkit generate  ──►  draft eval tasks from the inventory         (review, then run)
+whetkit run       ──►  how often does it pick the right tools?    (hit-rate)
+whetkit curate    ──►  fix the tool set, prove it helped           (before → after)
 ```
 
 ## Why tool curation matters
@@ -135,6 +136,7 @@ back to the original world.
 
 | Command | What it does |
 |---|---|
+| `whetkit slim` | Audit the union tool surface of your MCP **client config** (Claude Code / Cursor / Claude Desktop): tokens + $ per message, cross-server duplicates; `--dedupe --apply` writes reversible per-server overlay plans and a slimmed config. |
 | `whetkit doctor` | Lint the tool surface: vague descriptions, cryptic names, near-duplicates, context bloat. `--json`; `--fail-on warn` for CI. |
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
 | `whetkit generate` | Draft eval tasks from the inventory (server-context aware, read-only unless `--allow-writes`); review-before-trust YAML. |
