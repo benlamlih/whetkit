@@ -5,162 +5,270 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>whetkit — see what your MCP setup costs, cut it, prove it</title>
 <meta name="description" content="Free CLI: audit the token bill of your MCP client config (including plugin servers nobody else can see), fix tool surfaces with measurable before/after, and prove any reduction didn't break your workflows.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-body {
-  background: #0A0B0C; color: #EAECEE;
-  font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased; line-height: 1.55;
-}
-a { color: #5AD8A0; text-decoration: none; }
-a:hover { color: #7BE6B8; }
-::selection { background: #5AD8A0; color: #05100B; }
-.mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", monospace; }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
-.eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #656C74; font-weight: 600; }
-h1 { font-size: clamp(34px, 5.4vw, 56px); line-height: 1.06; letter-spacing: -0.02em; margin: 18px 0 20px; text-wrap: balance; }
-h2 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.15; letter-spacing: -0.015em; margin: 0 0 14px; text-wrap: balance; }
-.sub { font-size: 18px; color: #9AA1A9; max-width: 56ch; }
-.card { background: linear-gradient(180deg,#121519,#0E1114); border: 1px solid rgba(255,255,255,0.09); border-radius: 14px; }
-.chip { font-size: 11px; color: #656C74; border: 1px solid rgba(255,255,255,0.12); border-radius: 100px; padding: 3px 10px; letter-spacing: 0.08em; text-transform: uppercase; }
-section { padding: 72px 0; border-top: 1px solid rgba(255,255,255,0.07); }
-table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
-th { text-align: left; color: #656C74; font-weight: 500; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.09); }
-td { padding: 9px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); vertical-align: top; }
-td.num, th.num { text-align: right; }
-.tablewrap { overflow-x: auto; }
-.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.kbd { background: #0A0B0C; border: 1px solid rgba(255,255,255,0.14); border-radius: 8px; padding: 12px 16px; display: inline-flex; align-items: center; gap: 12px; font-size: 14px; max-width: 100%; overflow-x: auto; }
-.footnote { font-size: 12.5px; color: #656C74; }
-.good { color: #5AD8A0; } .bad { color: #F0885E; }
-@media (max-width: 860px) { .grid3 { grid-template-columns: 1fr !important; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: #0A0B0C; color: #EAECEE; font-family: "Space Grotesk", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: #5AD8A0; text-decoration: none; }
+  a:hover { color: #7BE6B8; }
+  ::selection { background: #5AD8A0; color: #05100B; }
+  @keyframes blink { 0%,49%{opacity:1;} 50%,100%{opacity:0;} }
+  @keyframes floatArrow { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(4px);} }
 </style>
+
 </head>
 <body>
 
-<nav class="wrap" style="display:flex; align-items:center; justify-content:space-between; padding:22px 28px;">
-  <span class="mono" style="font-weight:700;">whetkit</span>
-  <span style="display:flex; gap:22px; font-size:14px;">
-    <a href="#loop">How it works</a>
-    <a href="#compare">vs the rest</a>
-    <a href="https://github.com/benlamlih/whetkit/blob/main/README.md">Docs</a>
-    <a href="https://github.com/benlamlih/whetkit">GitHub ↗</a>
-  </span>
-</nav>
 
-<header class="wrap" style="padding: 56px 28px 72px;">
-  <span class="chip">Open source · Apache-2.0 · No API key needed to start</span>
-  <h1>Your MCP setup has a bill.<br>See it. Cut it. Prove it.</h1>
-  <p class="sub">Every message your agent sends carries the tool definitions of every connected
-  MCP server — including servers shipped by plugins that no other tool can even see.
-  whetkit prices that surface, fixes it reversibly, and proves the fix didn't break your workflows.</p>
-  <div style="margin:26px 0 10px;">
-    <span class="kbd mono">$ uv tool install whetkit &nbsp;&&nbsp; whetkit slim --config ~/.claude.json</span>
-  </div>
-  <p class="footnote">Works with Claude Code, Claude Desktop, Cursor — any client with an <span class="mono">mcpServers</span> config.</p>
+<div style="max-width: 1180px; margin: 0 auto; padding: 0 32px;">
 
-  <div class="card" style="margin-top:36px; padding:22px 24px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
-      <span class="eyebrow">A real audit — a developer machine, July 2026</span>
-      <span class="chip">measured, not mocked</span>
+  <!-- NAV -->
+  <nav style="display:flex; align-items:center; justify-content:space-between; height:76px; border-bottom:1px solid rgba(255,255,255,0.07);">
+    <div style="display:flex; align-items:center; gap:11px;">
+      <div style="width:22px; height:22px; background:#5AD8A0; transform:rotate(45deg); border-radius:4px;"></div>
+      <span style="font-family:'JetBrains Mono',monospace; font-weight:600; font-size:16px; letter-spacing:-0.02em;">whetkit</span>
     </div>
-    <div class="tablewrap"><table>
-      <tr><th>Server</th><th class="num">Tools</th><th class="num">Definition tokens</th><th class="num">$/msg*</th></tr>
-      <tr><td class="mono">firebase <span style="color:#656C74;">(plugin)</span></td><td class="num">19</td><td class="num">3,633</td><td class="num">$0.0109</td></tr>
-      <tr><td class="mono">playwright <span style="color:#656C74;">(plugin)</span></td><td class="num">24</td><td class="num">3,870</td><td class="num">$0.0116</td></tr>
-      <tr><td class="mono">context7 <span style="color:#656C74;">(plugin)</span></td><td class="num">2</td><td class="num">1,121</td><td class="num">$0.0034</td></tr>
-    </table></div>
-    <p style="margin:14px 0 4px; font-size:16px;"><strong>45 tools · ~8,624 tokens riding along with every message</strong>
-      — up to <strong class="good">$25.87 per 1,000 messages</strong> on API pricing.</p>
-    <p class="footnote">This config declared <em>zero</em> <span class="mono">mcpServers</span> — the whole surface was plugin-provided
-      and invisible to every other audit tool. *Uncached API ceiling; prompt caching and Claude Code's tool search reduce
-      the marginal cost substantially — on subscription plans the real cost is <em>context</em>: ~4% of the window gone before you type.</p>
-  </div>
-</header>
+    <div style="display:flex; align-items:center; gap:28px; font-size:14.5px;">
+      <a href="#loop" style="color:#9AA1A9;">The loop</a>
+      <a href="#positioning" style="color:#9AA1A9;">Positioning</a>
+      <a href="#commands" style="color:#9AA1A9;">Commands</a>
+      <a href="https://github.com/benlamlih/whetkit" style="display:inline-flex; align-items:center; gap:7px; color:#EAECEE; border:1px solid rgba(255,255,255,0.15); padding:8px 14px; border-radius:8px; font-weight:500;">GitHub <span style="color:#656C74;">↗</span></a>
+    </div>
+  </nav>
 
-<section id="loop">
-  <div class="wrap">
-    <span class="eyebrow">The loop</span>
-    <h2>The scale, the knife, the proof.</h2>
-    <div class="grid3" style="margin-top:26px;">
-      <div class="card" style="padding:20px 22px;">
-        <span class="chip">1 · slim</span>
-        <h3 style="margin:14px 0 8px;">Weigh it — free</h3>
-        <p style="color:#9AA1A9; font-size:15px; margin:0 0 12px;">Audit any client config: tokens and dollars per server,
-        cross-server duplicate tools, plugin-shipped servers, and which servers deserve
-        <span class="mono">alwaysLoad</span> under Claude Code's tool search — recommended from your real usage traces.</p>
-        <p class="mono footnote">whetkit slim --config ~/.claude.json --recommend-hot --from-traces traces.sqlite3</p>
+  <!-- HERO -->
+  <section style="display:grid; grid-template-columns: 1.02fr 1fr; gap:56px; align-items:center; padding:80px 0 92px;">
+    <div>
+      <div style="display:inline-flex; align-items:center; gap:10px; font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.06em; color:#5AD8A0; border:1px solid rgba(90,216,160,0.25); background:rgba(90,216,160,0.06); padding:6px 12px; border-radius:100px; margin-bottom:26px;">
+        <span style="width:6px;height:6px;border-radius:50%;background:#5AD8A0;"></span>whetkit slim · free · no API key
       </div>
-      <div class="card" style="padding:20px 22px;">
-        <span class="chip">2 · fix</span>
-        <h3 style="margin:14px 0 8px;">Cut it — reversibly</h3>
-        <p style="color:#9AA1A9; font-size:15px; margin:0 0 12px;">Self-correcting curation proposes a metadata overlay,
-        re-evaluates through it, and keeps the best plan by measured results. On the demo server:
-        <strong>hit-rate 80% → 100% on all 3 of 3 repetitions</strong>, tools 14 → 7, tokens −17%.
-        The origin server is never modified.</p>
-        <p class="mono footnote">whetkit fix --server your-server.json --tasks tasks/ --runs 3</p>
+      <h1 style="font-size:54px; line-height:1.04; letter-spacing:-0.035em; font-weight:600; margin:0 0 22px;">Your MCP setup<br>has a bill.<br><span style="color:#5AD8A0;">See it. Cut it. Prove it.</span></h1>
+      <p style="font-size:18.5px; line-height:1.55; color:#9AA1A9; max-width:500px; margin:0 0 30px;">Every message your agent sends drags its entire tool surface along with it. <span style="color:#EAECEE;">whetkit slim</span> audits that surface — tokens, dollars, duplicates — straight from your MCP client config. Free, no API key.</p>
+
+      <!-- install one-liner -->
+      <div style="background:#131619; border:1px solid rgba(255,255,255,0.12); border-radius:12px; padding:14px 16px; display:flex; align-items:center; gap:14px; margin-bottom:16px;">
+        <div style="font-family:'JetBrains Mono',monospace; font-size:13px; line-height:1.5; color:#EAECEE; overflow-x:auto; white-space:nowrap; flex:1;">
+          <span style="color:#5AD8A0;">$</span> uv tool install whetkit &amp;&amp; whetkit slim --config ~/.claude.json
+        </div>
+        <button onClick="{{ copyInstall }}" style="flex-shrink:0; font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA1A9; background:transparent; border:1px solid rgba(255,255,255,0.14); padding:6px 11px; border-radius:7px; cursor:pointer;">{{ installLabel }}</button>
       </div>
-      <div class="card" style="padding:20px 22px;">
-        <span class="chip">3 · prove</span>
-        <h3 style="margin:14px 0 8px;">Trust it — or catch it</h3>
-        <p style="color:#9AA1A9; font-size:15px; margin:0 0 12px;">A/B the raw and reduced views on your own tasks.
-        Real example: a glob-filtered gateway kept the task passing —
-        <span class="good">PASS → PASS</span> — while precision collapsed
-        <span class="bad">100% → 36%</span> with 2 wasted calls per task. No gateway would ever tell you that.</p>
-        <p class="mono footnote">whetkit diff before.json after.json</p>
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+        <a href="https://github.com/benlamlih/whetkit" style="display:inline-flex; align-items:center; gap:9px; background:#5AD8A0; color:#05100B; font-weight:600; font-size:15px; padding:12px 20px; border-radius:10px;">View on GitHub <span>↗</span></a>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#656C74;">Claude Code · Cursor · Claude Desktop · any MCP client</span>
       </div>
     </div>
-    <p class="footnote" style="margin-top:18px;">More measured results: GitHub's 44-tool remote MCP slimmed to 7 tools, tokens/task −73%, tool-selection hit-rate held at 100%.
-    Improvements within run-to-run noise are flagged, not celebrated — <span class="mono">⚠ ranges overlap</span> is printed right on the result.</p>
+
+    <!-- HERO: real bill audit card -->
+    <div style="background:linear-gradient(180deg,#121519,#0E1114); border:1px solid rgba(255,255,255,0.09); border-radius:16px; overflow:hidden; box-shadow:0 30px 80px -40px rgba(0,0,0,0.9);" ref="{{ heroRef }}">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid rgba(255,255,255,0.07);">
+        <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA1A9;">tool surface · sent every message</span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5AD8A0; border:1px solid rgba(90,216,160,0.28); background:rgba(90,216,160,0.07); padding:3px 9px; border-radius:100px;">measured, not mocked</span>
+      </div>
+
+      <!-- plugin insight -->
+      <div style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#E9B24E; background:rgba(233,178,78,0.06); padding:10px 20px; border-bottom:1px solid rgba(255,255,255,0.05); line-height:1.5;">
+        config declared <span style="color:#EAECEE;">0 mcpServers</span> — this whole surface is plugin-provided, invisible to config-only audits.
+      </div>
+
+      <!-- table -->
+      <div style="padding:16px 20px;">
+        <div style="font-family:'JetBrains Mono',monospace; display:grid; grid-template-columns:1fr 42px 70px 74px; gap:8px; font-size:10.5px; color:#656C74; letter-spacing:0.04em; padding-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.06);">
+          <div>SERVER</div><div style="text-align:right;">TOOLS</div><div style="text-align:right;">TOK/MSG</div><div style="text-align:right;">$/MSG</div>
+        </div>
+        <sc-for list="{{ servers }}" as="s" hint-placeholder-count="3">
+          <div style="font-family:'JetBrains Mono',monospace; display:grid; grid-template-columns:1fr 42px 70px 74px; gap:8px; font-size:12.5px; padding:11px 0; border-bottom:1px solid rgba(255,255,255,0.05);">
+            <div style="color:#EAECEE;">{{ s.name }} <span style="color:#656C74; font-size:10.5px;">plugin</span></div>
+            <div style="text-align:right; color:#9AA1A9;">{{ s.tools }}</div>
+            <div style="text-align:right; color:#9AA1A9;">{{ s.tokens }}</div>
+            <div style="text-align:right; color:#9AA1A9;">{{ s.cost }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- total -->
+      <div style="padding:6px 20px 20px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA1A9;">45 tools · <span style="color:#EAECEE;">{{ billTokens }}</span> tokens riding along</span>
+        </div>
+        <div style="display:flex; align-items:baseline; gap:8px; margin-top:8px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#656C74;">up to</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:38px; font-weight:600; letter-spacing:-0.03em; color:#E9B24E; line-height:0.9;">${{ billDollars }}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#9AA1A9;">/ 1,000 msgs</span>
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#656C74; line-height:1.5; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
+          Uncached API ceiling. Prompt caching &amp; Claude Code's tool search cut marginal cost; on subscription plans the real cost is context-window share — <span style="color:#9AA1A9;">~4% gone before you type</span>.
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- THE LOOP -->
+<section id="loop" style="border-top:1px solid rgba(255,255,255,0.07); background:#0E1012;">
+  <div style="max-width:1180px; margin:0 auto; padding:88px 32px;">
+    <div style="margin-bottom:48px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.1em; color:#5AD8A0; margin-bottom:16px;">THE LOOP</div>
+      <h2 style="font-size:38px; line-height:1.1; letter-spacing:-0.03em; font-weight:600; margin:0;">The scale, the knife, the proof.</h2>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px; align-items:stretch;">
+
+      <!-- SLIM -->
+      <div style="background:#0A0B0C; border:1px solid rgba(255,255,255,0.09); border-radius:16px; padding:26px; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:14px; color:#5AD8A0;">whetkit slim</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#656C74; letter-spacing:0.08em;">THE SCALE</span>
+        </div>
+        <h3 style="font-size:19px; font-weight:600; margin:0 0 10px;">Weigh what you're sending</h3>
+        <p style="font-size:14.5px; line-height:1.55; color:#9AA1A9; margin:0 0 20px; flex:1;">Tokens and dollars per server, cross-server duplicate tools, and plugin-provided servers config-only tools miss. Then it tells you which servers earn <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#EAECEE;">alwaysLoad: true</span> under Claude Code's tool search — recommended from your real usage traces.</p>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA1A9; background:#101316; border:1px solid rgba(255,255,255,0.07); border-radius:9px; padding:12px 14px;">
+          <span style="color:#5AD8A0;">$</span> whetkit slim --recommend-hot --from-traces
+        </div>
+      </div>
+
+      <!-- FIX -->
+      <div style="background:#0A0B0C; border:1px solid rgba(255,255,255,0.09); border-radius:16px; padding:26px; display:flex; flex-direction:column;" ref="{{ fixRef }}">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:14px; color:#5AD8A0;">whetkit fix</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#656C74; letter-spacing:0.08em;">THE KNIFE</span>
+        </div>
+        <h3 style="font-size:19px; font-weight:600; margin:0 0 10px;">Self-correcting curation</h3>
+        <p style="font-size:14.5px; line-height:1.55; color:#9AA1A9; margin:0 0 20px; flex:1;">Proposes a metadata overlay, re-evaluates the agent <em style="font-style:normal; color:#EAECEE;">through</em> it, and keeps the plan that wins on measured results — not on a hunch.</p>
+        <div style="background:#101316; border:1px solid rgba(255,255,255,0.07); border-radius:11px; padding:16px;">
+          <div style="display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:12px;">
+            <div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#656C74; margin-bottom:4px;">hit-rate · 3/3 reps</div>
+              <div style="display:flex; align-items:baseline; gap:6px; font-family:'JetBrains Mono',monospace;">
+                <span style="font-size:15px; color:#E9B24E;">{{ fixBefore }}%</span>
+                <span style="color:#656C74;">→</span>
+                <span style="font-size:26px; font-weight:600; color:#5AD8A0; letter-spacing:-0.02em;">{{ fixAfter }}%</span>
+              </div>
+            </div>
+          </div>
+          <div style="height:6px; background:rgba(255,255,255,0.06); border-radius:100px; overflow:hidden; margin-bottom:14px;"><div style="height:100%; width:{{ fixAfterW }}; background:#5AD8A0; border-radius:100px;"></div></div>
+          <div style="display:flex; gap:16px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#9AA1A9;">
+            <span>14 → <span style="color:#5AD8A0;">7</span> tools</span>
+            <span>tokens <span style="color:#5AD8A0;">−17%</span></span>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#656C74; margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.06);">origin server never modified · fully reversible</div>
+        </div>
+      </div>
+
+      <!-- PROVE -->
+      <div style="background:#0A0B0C; border:1px solid rgba(255,255,255,0.09); border-radius:16px; padding:26px; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:14px; color:#5AD8A0;">whetkit diff</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#656C74; letter-spacing:0.08em;">THE PROOF</span>
+        </div>
+        <h3 style="font-size:19px; font-weight:600; margin:0 0 10px;">A/B against the raw set</h3>
+        <p style="font-size:14.5px; line-height:1.55; color:#9AA1A9; margin:0 0 20px; flex:1;">Run any reduced view against the raw one on <em style="font-style:normal; color:#EAECEE;">your own tasks</em>. A glob-filtered gateway looked fine — until whetkit caught what no gateway will ever tell you:</p>
+        <div style="background:#101316; border:1px solid rgba(255,255,255,0.07); border-radius:11px; padding:16px; font-family:'JetBrains Mono',monospace;">
+          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px;"><span style="color:#9AA1A9;">task outcome</span><span style="color:#5AD8A0;">PASS → PASS</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px;"><span style="color:#9AA1A9;">tool precision</span><span><span style="color:#EAECEE;">100%</span> <span style="color:#656C74;">→</span> <span style="color:#E9B24E;">36%</span></span></div>
+          <div style="display:flex; justify-content:space-between; font-size:12px;"><span style="color:#9AA1A9;">wasted calls</span><span style="color:#E9B24E;">+2 / task</span></div>
+          <div style="font-size:11px; color:#656C74; margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.06);">green light, quietly degrading. Now you'd know.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- supporting stats -->
+    <div style="margin-top:20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; background:rgba(90,216,160,0.04); border:1px solid rgba(90,216,160,0.16); border-radius:12px; padding:16px 22px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#9AA1A9;">GitHub's 44-tool remote MCP → <span style="color:#5AD8A0;">7 tools</span> · tokens/task <span style="color:#5AD8A0;">−73%</span> · hit-rate held <span style="color:#5AD8A0;">100%</span></div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#656C74;">⚠ improvements whose ranges overlap are flagged — could be chance</div>
+    </div>
   </div>
 </section>
 
-<section id="compare">
-  <div class="wrap">
-    <span class="eyebrow">Honest positioning</span>
-    <h2>whetkit doesn't compete with your reducer.<br>It measures it.</h2>
-    <div class="tablewrap" style="margin-top:24px;"><table>
-      <tr><th>You use…</th><th>It's great at</th><th>What whetkit adds</th></tr>
-      <tr><td>Claude Code tool search</td><td>~85% context reduction, built in</td><td>Which servers deserve <span class="mono">alwaysLoad</span> — derived from your real traces, not guesses. Plus a lint for the silently-ignored <span class="mono">defer_loading</span> trap.</td></tr>
-      <tr><td>Gateways &amp; toolsets<br><span class="footnote">hypertool, mcp-filter, Meta-MCP…</span></td><td>Dynamic loading, big savings</td><td>The A/B proof your reduced view didn't quietly degrade your agent — hit-rate, precision, wasted calls, per task.</td></tr>
-      <tr><td>Static graders</td><td>Letter grades for schemas</td><td>Grades don't run tools. whetkit runs live agents and attributes every failure to the tool that caused it — then ships the fix.</td></tr>
-    </table></div>
+<!-- HONEST POSITIONING -->
+<section id="positioning" style="border-top:1px solid rgba(255,255,255,0.07);">
+  <div style="max-width:1180px; margin:0 auto; padding:88px 32px;">
+    <div style="margin-bottom:44px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.1em; color:#5AD8A0; margin-bottom:16px;">POSITIONING</div>
+      <h2 style="font-size:38px; line-height:1.1; letter-spacing:-0.03em; font-weight:600; margin:0;">whetkit doesn't compete with<br>your reducer. It <span style="color:#5AD8A0;">measures</span> it.</h2>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:16px;">
+      <sc-for list="{{ positions }}" as="p" hint-placeholder-count="3">
+        <div style="display:grid; grid-template-columns:1fr 40px 1.25fr; gap:24px; align-items:center; background:#0E1012; border:1px solid rgba(255,255,255,0.09); border-radius:14px; padding:24px 28px;">
+          <div>
+            <div style="font-size:17px; font-weight:600; margin-bottom:6px;">{{ p.name }}</div>
+            <div style="font-size:14px; color:#9AA1A9; line-height:1.5;">{{ p.great }}</div>
+          </div>
+          <div style="color:#656C74; font-size:22px; text-align:center;">→</div>
+          <div style="border-left:2px solid rgba(90,216,160,0.3); padding-left:22px;">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#5AD8A0; letter-spacing:0.06em; margin-bottom:7px;">WHETKIT ADDS</div>
+            <div style="font-size:14.5px; color:#EAECEE; line-height:1.55;">{{ p.adds }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <span class="eyebrow">The whole kit</span>
-    <h2>Eleven commands, one honest pipeline.</h2>
-    <div class="tablewrap" style="margin-top:22px;"><table class="mono" style="font-size:13px;">
-      <tr><td>slim</td><td style="color:#9AA1A9;">audit + shrink your client config's union tool surface ($, dedupe, plugins, alwaysLoad, --share)</td></tr>
-      <tr><td>doctor</td><td style="color:#9AA1A9;">ten-second lint of one server's surface — no tasks, no API key</td></tr>
-      <tr><td>inspect</td><td style="color:#9AA1A9;">what the agent actually sees: tools, schemas, token costs</td></tr>
-      <tr><td>generate</td><td style="color:#9AA1A9;">draft eval tasks from the inventory (context-aware, read-only by default)</td></tr>
-      <tr><td>run</td><td style="color:#9AA1A9;">live agentic evals: --runs N mean±range, flaky detection, per-task timeouts, cost</td></tr>
-      <tr><td>curate</td><td style="color:#9AA1A9;">baseline → LLM-proposed overlay → re-eval → before/after report</td></tr>
-      <tr><td>fix</td><td style="color:#9AA1A9;">self-correcting curation: propose → eval → revise until it converges</td></tr>
-      <tr><td>plan-init</td><td style="color:#9AA1A9;">scaffold a view plan from --keep / --from-tasks / --from-traces</td></tr>
-      <tr><td>diff</td><td style="color:#9AA1A9;">before/after verdict from two summary files</td></tr>
-      <tr><td>export</td><td style="color:#9AA1A9;">share a plan as an upstream-PR fix table or gateway JSON</td></tr>
-      <tr><td>overlay</td><td style="color:#9AA1A9;">serve any curated view as a real MCP server — reversible, origin untouched</td></tr>
-    </table></div>
+<!-- COMMAND INVENTORY -->
+<section id="commands" style="border-top:1px solid rgba(255,255,255,0.07); background:#0E1012;">
+  <div style="max-width:1180px; margin:0 auto; padding:88px 32px;">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:40px; flex-wrap:wrap; gap:16px;">
+      <div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:0.1em; color:#5AD8A0; margin-bottom:16px;">COMMANDS</div>
+        <h2 style="font-size:34px; line-height:1.1; letter-spacing:-0.03em; font-weight:600; margin:0;">Eleven commands. One binary.</h2>
+      </div>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#656C74;">whetkit &lt;command&gt; --help</span>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:12px;">
+      <sc-for list="{{ commands }}" as="c" hint-placeholder-count="11">
+        <div style="display:flex; align-items:baseline; gap:16px; background:#0A0B0C; border:1px solid rgba(255,255,255,0.08); border-radius:11px; padding:15px 18px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:13.5px; color:#5AD8A0; min-width:88px; flex-shrink:0;">{{ c.cmd }}</span>
+          <span style="font-size:14px; color:#9AA1A9; line-height:1.45;">{{ c.desc }}</span>
+        </div>
+      </sc-for>
+    </div>
   </div>
 </section>
 
-<section>
-  <div class="wrap" style="text-align:center;">
-    <h2>Weigh your setup in the next two minutes.</h2>
-    <p class="sub" style="margin:0 auto 24px;">No tasks to write, no API key, nothing modified. Just the number.</p>
-    <span class="kbd mono" style="font-size:15px;">$ uv tool install whetkit && whetkit slim --config ~/.claude.json --share</span>
-    <p style="margin-top:26px;"><a href="https://github.com/benlamlih/whetkit">GitHub</a> ·
-      <a href="https://pypi.org/project/whetkit/">PyPI</a> ·
-      <a href="https://github.com/benlamlih/whetkit/blob/main/docs/prove-your-gateway.md">Prove your gateway</a> ·
-      <a href="https://github.com/benlamlih/whetkit/issues/new?template=cloud-waitlist.yml">Cloud waitlist</a></p>
-    <p class="footnote" style="margin-top:30px;">Apache-2.0 · numbers on this page are real measurements from the linked repo's test runs, dated July 2026 · token estimates ~4 chars/token; dollar figures are uncached API ceilings — deliberately the worst case.</p>
+<!-- CLOSING CTA -->
+<section style="border-top:1px solid rgba(255,255,255,0.07);">
+  <div style="max-width:1180px; margin:0 auto; padding:96px 32px;">
+    <div style="background:linear-gradient(160deg,#121519,#0C0E10); border:1px solid rgba(255,255,255,0.09); border-radius:20px; padding:52px 44px; text-align:center; box-shadow:0 40px 100px -55px rgba(0,0,0,0.9);">
+      <h2 style="font-size:38px; line-height:1.12; letter-spacing:-0.03em; font-weight:600; margin:0 auto 16px; max-width:720px;">Weigh your setup in the next two minutes.</h2>
+      <p style="font-size:17px; color:#9AA1A9; margin:0 auto 32px; max-width:520px; line-height:1.55;">No tasks. No API key. Nothing modified. Just the number.</p>
+      <div style="display:inline-flex; align-items:center; gap:14px; background:#0A0B0C; border:1px solid rgba(255,255,255,0.14); border-radius:12px; padding:15px 18px; margin-bottom:32px; max-width:100%; overflow-x:auto;">
+        <div style="font-family:'JetBrains Mono',monospace; font-size:13.5px; color:#EAECEE; white-space:nowrap;"><span style="color:#5AD8A0;">$</span> uv tool install whetkit &amp;&amp; whetkit slim --config ~/.claude.json --share</div>
+        <button onClick="{{ copyShare }}" style="flex-shrink:0; font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA1A9; background:transparent; border:1px solid rgba(255,255,255,0.14); padding:6px 11px; border-radius:7px; cursor:pointer;">{{ shareLabel }}</button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; font-family:'JetBrains Mono',monospace; font-size:13.5px;">
+        <a href="https://github.com/benlamlih/whetkit" style="display:inline-flex; align-items:center; gap:7px; border:1px solid rgba(255,255,255,0.15); color:#EAECEE; padding:10px 16px; border-radius:9px;">GitHub <span style="color:#656C74;">↗</span></a>
+        <a href="https://pypi.org/project/whetkit" style="display:inline-flex; align-items:center; gap:7px; border:1px solid rgba(255,255,255,0.15); color:#EAECEE; padding:10px 16px; border-radius:9px;">PyPI <span style="color:#656C74;">↗</span></a>
+        <a href="https://github.com/benlamlih/whetkit/blob/main/docs/prove-your-gateway.md" style="display:inline-flex; align-items:center; gap:7px; border:1px solid rgba(255,255,255,0.15); color:#EAECEE; padding:10px 16px; border-radius:9px;">Prove your gateway <span style="color:#656C74;">↗</span></a>
+        <a href="https://github.com/benlamlih/whetkit/issues/new?template=cloud-waitlist.yml" style="display:inline-flex; align-items:center; gap:7px; border:1px solid rgba(90,216,160,0.3); background:rgba(90,216,160,0.06); color:#5AD8A0; padding:10px 16px; border-radius:9px;">Cloud waitlist <span>→</span></a>
+      </div>
+    </div>
   </div>
 </section>
+
+<!-- FOOTER -->
+<footer style="border-top:1px solid rgba(255,255,255,0.07);">
+  <div style="max-width:1180px; margin:0 auto; padding:40px 32px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:20px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; gap:11px;">
+        <div style="width:16px; height:16px; background:#5AD8A0; transform:rotate(45deg); border-radius:3px;"></div>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:14px; color:#9AA1A9;">whetkit</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:26px; font-size:14px; font-family:'JetBrains Mono',monospace;">
+        <a href="https://github.com/benlamlih/whetkit" style="color:#9AA1A9;">GitHub</a>
+        <a href="https://pypi.org/project/whetkit" style="color:#9AA1A9;">PyPI</a>
+        <a href="https://www.apache.org/licenses/LICENSE-2.0" style="color:#9AA1A9;">Apache-2.0</a>
+      </div>
+    </div>
+    <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#656C74; line-height:1.6; border-top:1px solid rgba(255,255,255,0.06); padding-top:20px;">
+      All numbers are real measurements (July 2026). Token estimates assume ~4 chars/token. Dollar figures are deliberately worst-case — uncached API ceilings; caching, tool search, and subscription plans reduce the marginal cost you actually pay.
+    </div>
+  </div>
+</footer>
 
 </body>
 </html>
