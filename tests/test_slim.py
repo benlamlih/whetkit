@@ -222,7 +222,7 @@ class TestSlimCli:
         rewritten = [
             name
             for name, spec in reparsed.servers.items()
-            if isinstance(spec, StdioSpec) and spec.command == "whetkit"
+            if isinstance(spec, StdioSpec) and Path(spec.command).name == "whetkit"
         ]
         assert len(rewritten) == 1  # exactly the duplicate loser was rewritten
         loser = rewritten[0]
@@ -269,5 +269,93 @@ class TestWriteSlimOutput:
         document = json.loads(slimmed_path.read_text())["mcpServers"]
         assert document["untouched"] == {"command": "node", "args": ["x.js"]}
         assert document["old-sse"] == {"type": "sse", "url": "https://x/sse"}
-        assert document["planned"]["command"] == "whetkit"
+        assert Path(document["planned"]["command"]).name == "whetkit"
         assert (tmp_path / "out" / "planned" / "server.json").is_file()
+
+
+class TestUltratestRegressions:
+    def test_tie_chain_reasons_point_at_a_visible_survivor(self) -> None:
+        # a==b==c descriptions: pairwise ties chain; every hide reason must
+        # name a copy that actually stays visible.
+        inventories = {
+            name: inventory(tool("search", "Search the files.")) for name in ("a", "b", "c")
+        }
+        plans = build_dedupe_plans(inventories, cross_server_duplicates(inventories))
+        hidden = {s for s, p in plans.items() if p.overrides}
+        (visible,) = set(inventories) - hidden
+        for plan in plans.values():
+            for override in plan.overrides:
+                assert f"Duplicate of {visible}.search" in override.reason
+
+    def test_out_dir_expands_tilde(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        config = parse_client_config(
+            write_config(tmp_path, {"mcpServers": {"s": {"command": "python"}}})
+        )
+        from whetkit.curation import CurationPlan, ToolOverride
+
+        plans = {"s": CurationPlan(overrides=[ToolOverride(original_name="t", hidden=True)])}
+        slimmed = write_slim_output(config, plans, "~/tilde-out")
+        assert slimmed == tmp_path / "tilde-out" / "mcp.slimmed.json"
+
+    def test_wrapper_command_is_absolute_when_resolvable(self, tmp_path: Path, monkeypatch) -> None:
+        fake = tmp_path / "bin" / "whetkit"
+        fake.parent.mkdir()
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", str(fake.parent))
+        config = parse_client_config(
+            write_config(tmp_path, {"mcpServers": {"s": {"command": "python"}}})
+        )
+        from whetkit.curation import CurationPlan, ToolOverride
+
+        plans = {"s": CurationPlan(overrides=[ToolOverride(original_name="t", hidden=True)])}
+        slimmed = write_slim_output(config, plans, tmp_path / "out")
+        entry = json.loads(slimmed.read_text())["mcpServers"]["s"]
+        assert entry["command"] == str(fake)
+
+    def test_rich_config_flagged_not_standalone(self, tmp_path: Path) -> None:
+        rich = write_config(
+            tmp_path,
+            {
+                "mcpServers": {"s": {"command": "python"}},
+                "projects": {},
+                "someSetting": True,
+            },
+        )
+        assert parse_client_config(rich).standalone is False
+        bare = tmp_path / "bare.json"
+        bare.write_text(json.dumps({"mcpServers": {"s": {"command": "python"}}}))
+        assert parse_client_config(bare).standalone is True
+
+    def test_hide_of_uninspectable_server_warns_and_is_dropped(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    },
+                    "dead": {"command": "/nonexistent/binary"},
+                }
+            },
+        )
+        result = runner.invoke(
+            app,
+            [
+                "slim",
+                "--config",
+                str(path),
+                "--hide",
+                "dead",
+                "--apply",
+                "--out",
+                str(tmp_path / "o"),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        norm = plain(result.output)
+        assert "cannot act on 'dead'" in norm
+        assert "nothing to apply" in norm
+        assert "no --hide servers" not in norm  # the old lying message
