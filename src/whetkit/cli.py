@@ -584,6 +584,191 @@ def plan_init(
 
 
 @app.command()
+def slim(
+    config: Annotated[
+        str,
+        typer.Option(
+            "--config",
+            help=(
+                "MCP client config file (Claude Code ~/.claude.json or .mcp.json, "
+                "Cursor ~/.cursor/mcp.json, Claude Desktop claude_desktop_config.json)"
+            ),
+        ),
+    ],
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Reference model for the $/message estimate"),
+    ] = "anthropic:claude-sonnet-5",
+    dedupe: Annotated[
+        bool,
+        typer.Option(
+            "--dedupe",
+            help="Build hide plans for cross-server duplicate tools (loser side)",
+        ),
+    ] = False,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help=(
+                "Write per-server plans plus a slimmed client config (the original "
+                "config is never touched). Requires --dedupe and/or --hide."
+            ),
+        ),
+    ] = False,
+    out: Annotated[
+        str, typer.Option("--out", "-o", help="Output directory for --apply")
+    ] = "slim-out",
+    keep: Annotated[
+        str,
+        typer.Option("--keep", help="Comma-separated server names slim must never touch"),
+    ] = "",
+    hide: Annotated[
+        str,
+        typer.Option("--hide", help="Comma-separated server names to hide entirely"),
+    ] = "",
+    json_out: Annotated[
+        bool, typer.Option("--json", help="Emit the audit as JSON instead of text")
+    ] = False,
+) -> None:
+    """Audit — and optionally shrink — the union tool surface your MCP client
+    sends with every message. The audit needs no tasks and no API key."""
+    from whetkit.llm import parse_model
+    from whetkit.llm.pricing import estimate_cost_usd
+    from whetkit.slim import (
+        build_dedupe_plans,
+        cross_server_duplicates,
+        parse_client_config,
+        write_slim_output,
+    )
+
+    try:
+        client_config = parse_client_config(config)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    keep_servers = {s.strip() for s in keep.split(",") if s.strip()}
+    hide_servers = {s.strip() for s in hide.split(",") if s.strip()}
+    for named in (keep_servers | hide_servers) - set(client_config.servers):
+        typer.echo(f"warning: --keep/--hide names unknown server {named!r}", err=True)
+    if apply and not (dedupe or hide_servers):
+        raise typer.BadParameter("--apply needs --dedupe and/or --hide to have work to do")
+
+    async def _inventories() -> tuple[dict, dict[str, str]]:
+        inventories: dict = {}
+        failures: dict[str, str] = {}
+        for name, spec in client_config.servers.items():
+            typer.echo(f"inspecting {name} ...", err=True)
+            try:
+                inventories[name] = await inspect_server(spec)
+            except Exception as exc:  # one dead server must not kill the audit
+                failures[name] = f"{type(exc).__name__}: {exc}"
+        return inventories, failures
+
+    inventories, failures = asyncio.run(_inventories())
+    if not inventories:
+        typer.echo("error: no server in the config could be inspected", err=True)
+        raise typer.Exit(code=1)
+
+    duplicates = cross_server_duplicates(inventories)
+    model_id = parse_model(model)[1]
+    total_tokens = sum(inv.total_definition_tokens for inv in inventories.values())
+    per_message = estimate_cost_usd(model_id, total_tokens, 0)
+
+    plans = (
+        build_dedupe_plans(
+            inventories,
+            duplicates if dedupe else [],
+            hide_servers=hide_servers,
+            keep_servers=keep_servers,
+        )
+        if (dedupe or hide_servers)
+        else {}
+    )
+    hidden_tokens = 0
+    for server, plan in plans.items():
+        hidden = {o.original_name for o in plan.overrides if o.hidden}
+        hidden_tokens += sum(
+            t.definition_tokens for t in inventories[server].tools if t.name in hidden
+        )
+    after_tokens = total_tokens - hidden_tokens
+    after_cost = estimate_cost_usd(model_id, after_tokens, 0)
+
+    if json_out:
+        import json as jsonlib
+
+        document = {
+            "config": client_config.path,
+            "model": model,
+            "servers": {
+                name: {
+                    "tools": inv.tool_count,
+                    "definition_tokens": inv.total_definition_tokens,
+                    "cost_per_message_usd": estimate_cost_usd(
+                        model_id, inv.total_definition_tokens, 0
+                    ),
+                }
+                for name, inv in inventories.items()
+            },
+            "failures": failures,
+            "skipped": [s.model_dump() for s in client_config.skipped],
+            "total_definition_tokens": total_tokens,
+            "cost_per_message_usd": per_message,
+            "cross_server_duplicates": [d.model_dump() for d in duplicates],
+            "plan_servers": sorted(plans),
+            "after_definition_tokens": after_tokens if plans else None,
+            "after_cost_per_message_usd": after_cost if plans else None,
+        }
+        typer.echo(jsonlib.dumps(document, indent=2))
+    else:
+        typer.echo(f"\nMCP client config: {client_config.path}")
+        name_w = max(len(n) for n in inventories)
+        typer.echo(f"\n{'SERVER':<{name_w}}  {'TOOLS':>5}  {'DEF TOKENS':>10}  {'$/MSG':>8}")
+        for name, inv in inventories.items():
+            cost = estimate_cost_usd(model_id, inv.total_definition_tokens, 0)
+            cost_s = f"${cost:.4f}" if cost is not None else "?"
+            typer.echo(
+                f"{name:<{name_w}}  {inv.tool_count:>5}  "
+                f"{inv.total_definition_tokens:>10}  {cost_s:>8}"
+            )
+        for name, reason in failures.items():
+            typer.echo(f"{name:<{name_w}}  (could not inspect: {reason})")
+        for skipped in client_config.skipped:
+            typer.echo(f"{skipped.name:<{name_w}}  (skipped: {skipped.reason})")
+        typer.echo(
+            f"\nUnion: {sum(i.tool_count for i in inventories.values())} tools, "
+            f"~{total_tokens} definition tokens riding along with EVERY message"
+        )
+        if per_message is not None:
+            typer.echo(
+                f"≈ ${per_message:.4f} of context per message on {model_id} "
+                f"(≈ ${per_message * 1000:.2f} per 1,000 messages)"
+            )
+        if duplicates:
+            typer.echo(f"\nCross-server duplicates ({len(duplicates)}):")
+            for duplicate in duplicates:
+                typer.echo(f"  • {duplicate.describe()}")
+        elif len(inventories) > 1:
+            typer.echo("\nNo cross-server duplicate tools detected.")
+        if plans:
+            typer.echo(
+                f"\nSlim plan: hide "
+                f"{sum(len(p.overrides) for p in plans.values())} tool(s) across "
+                f"{len(plans)} server(s) -> ~{after_tokens} tokens"
+                + (f", ${after_cost:.4f}/message" if after_cost is not None else "")
+            )
+
+    if apply and plans:
+        slimmed = write_slim_output(client_config, plans, out)
+        typer.echo(f"\nwrote {slimmed}")
+        typer.echo(
+            "Point your client at the slimmed config to use it; your original "
+            f"config was not modified — reverting is switching back to {client_config.path}."
+        )
+    elif apply:
+        typer.echo("\nnothing to apply — no duplicates found and no --hide servers")
+
+
+@app.command()
 def export(
     plan: Annotated[
         str, typer.Option("--plan", help="Curation plan YAML to export")

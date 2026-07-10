@@ -1,5 +1,6 @@
 """Tool introspection: inventory a server's tools and summarize their cost."""
 
+import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -56,6 +57,13 @@ class ToolInfo(BaseModel):
         return estimate_tokens(self.description)
 
     @property
+    def definition_tokens(self) -> int:
+        """What this tool costs in context on EVERY request: the client sends
+        name + description + full input schema with each message."""
+        schema = json.dumps(self.input_schema, sort_keys=True) if self.input_schema else ""
+        return estimate_tokens(f"{self.name} {self.description} {schema}")
+
+    @property
     def complexity(self) -> int:
         return schema_complexity(self.input_schema)
 
@@ -76,6 +84,10 @@ class ServerInventory(BaseModel):
     @property
     def total_description_tokens(self) -> int:
         return sum(t.description_tokens for t in self.tools)
+
+    @property
+    def total_definition_tokens(self) -> int:
+        return sum(t.definition_tokens for t in self.tools)
 
     @property
     def total_complexity(self) -> int:

@@ -67,3 +67,13 @@ uv run whetkit overlay --server examples/sample-server --plan .whetkit/curation-
 
 Point Claude Code (or any MCP-capable agent) at that command as a stdio
 server and it sees the curated tool set.
+
+## Slimming a whole client config
+
+`whetkit slim --config ~/.claude.json` audits every server your MCP client
+loads and prices the union tool surface that rides along with every message.
+`--dedupe --apply` writes per-server hide plans plus `mcp.slimmed.json`,
+where slimmed servers are served through `whetkit overlay`. Your original
+config is never modified — reverting is pointing the client back at it (or
+deleting the slim-out directory). The same reversibility guarantee as any
+other plan: metadata only, origin servers untouched.
