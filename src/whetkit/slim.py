@@ -180,17 +180,58 @@ def build_dedupe_plans(
     hide_servers: set[str] = frozenset(),
     keep_servers: set[str] = frozenset(),
 ) -> dict[str, CurationPlan]:
-    """Per-server hide plans: duplicate losers, plus every tool of servers
-    the user asked to hide outright. Servers in ``keep_servers`` are never
-    touched. Only servers that end up with overrides get a plan."""
-    hides: dict[str, dict[str, str]] = {}
+    """Per-server hide plans from duplicate clusters plus whole-server hides.
+
+    Duplicate pairs are consolidated into clusters (connected components):
+    each cluster keeps exactly ONE copy — the most informative description,
+    tie broken by config order — and every other member is hidden with a
+    reason naming that single visible winner. Servers in ``keep_servers``
+    are never touched; only servers that end up with overrides get a plan."""
+    order = {name: index for index, name in enumerate(inventories)}
+
+    parent: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def find(node: tuple[str, str]) -> tuple[str, str]:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    def union(a: tuple[str, str], b: tuple[str, str]) -> None:
+        parent[find(a)] = find(b)
+
     for duplicate in duplicates:
-        if duplicate.hide_server in keep_servers:
-            continue
-        hides.setdefault(duplicate.hide_server, {})[duplicate.hide_tool] = (
-            f"Duplicate of {duplicate.keep_server}.{duplicate.keep_tool} "
-            "(kept there); hidden to stop split attention."
+        union(
+            (duplicate.keep_server, duplicate.keep_tool),
+            (duplicate.hide_server, duplicate.hide_tool),
         )
+
+    clusters: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for node in list(parent):
+        clusters.setdefault(find(node), []).append(node)
+
+    def description_tokens(server: str, tool: str) -> int:
+        inventory = inventories.get(server)
+        if inventory is None:
+            return 0
+        return next((t.description_tokens for t in inventory.tools if t.name == tool), 0)
+
+    hides: dict[str, dict[str, str]] = {}
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+        winner = max(
+            members,
+            key=lambda node: (description_tokens(*node), -order.get(node[0], 1_000_000)),
+        )
+        for server, tool in members:
+            if (server, tool) == winner or server in keep_servers:
+                continue
+            hides.setdefault(server, {})[tool] = (
+                f"Duplicate of {winner[0]}.{winner[1]} (the kept copy); "
+                "hidden to stop split attention."
+            )
     for server in hide_servers - keep_servers:
         inventory = inventories.get(server)
         if inventory is None:
@@ -199,27 +240,6 @@ def build_dedupe_plans(
             hides.setdefault(server, {})[tool.name] = (
                 "Whole server hidden by --hide; delete the plan to restore."
             )
-
-    # A keeper named in a reason can itself be hidden by ANOTHER pair (ties
-    # chain: c hidden "kept b" while b is hidden "kept a"). Re-point every
-    # duplicate reason at a copy that actually stays visible.
-    def visible_holder(tool: str) -> str | None:
-        for server, inventory in inventories.items():
-            if tool in hides.get(server, {}):
-                continue
-            if any(t.name == tool for t in inventory.tools):
-                return server
-        return None
-
-    for tool_reasons in hides.values():
-        for tool, reason in list(tool_reasons.items()):
-            if not reason.startswith("Duplicate of "):
-                continue
-            survivor = visible_holder(tool)
-            if survivor is not None:
-                tool_reasons[tool] = (
-                    f"Duplicate of {survivor}.{tool} (kept there); hidden to stop split attention."
-                )
 
     plans: dict[str, CurationPlan] = {}
     for server, tool_reasons in hides.items():
@@ -238,13 +258,16 @@ def write_slim_output(
     config: ClientConfig,
     plans: dict[str, CurationPlan],
     out_dir: str | Path,
-) -> Path:
+    inventories: dict[str, ServerInventory] | None = None,
+) -> tuple[Path, list[str]]:
     """Write per-server origin spec + plan, and the rewritten client config.
 
-    Servers with a plan are re-pointed at ``whetkit overlay``; everything
-    else (including skipped entries) is copied through verbatim. Env values
-    are preserved as-is — they came from a config file of the same
-    sensitivity. Returns the path of the slimmed config."""
+    Servers with a plan are re-pointed at ``whetkit overlay``; a server
+    whose plan hides EVERY tool is dropped from the slimmed config outright
+    (no point launching an overlay to serve nothing). Everything else
+    (including skipped entries) is copied through verbatim; env values are
+    preserved as-is — they came from a config file of the same sensitivity.
+    Returns (slimmed config path, names of dropped servers)."""
     out = Path(out_dir).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     # GUI clients (Claude Desktop) launch servers with a minimal PATH where a
@@ -252,10 +275,16 @@ def write_slim_output(
     whetkit_command = shutil.which("whetkit") or "whetkit"
 
     slimmed: dict[str, dict] = {}
+    removed: list[str] = []
     for name, raw_entry in config.raw_entries.items():
         plan = plans.get(name)
         if plan is None or name not in config.servers:
             slimmed[name] = raw_entry
+            continue
+        inventory = (inventories or {}).get(name)
+        hidden = {o.original_name for o in plan.overrides if o.hidden}
+        if inventory is not None and hidden >= {t.name for t in inventory.tools}:
+            removed.append(name)
             continue
         server_dir = out / name
         server_dir.mkdir(parents=True, exist_ok=True)
@@ -276,4 +305,4 @@ def write_slim_output(
 
     slimmed_path = out / "mcp.slimmed.json"
     slimmed_path.write_text(json.dumps({"mcpServers": slimmed}, indent=2) + "\n")
-    return slimmed_path
+    return slimmed_path, removed

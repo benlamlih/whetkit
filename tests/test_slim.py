@@ -265,7 +265,7 @@ class TestWriteSlimOutput:
                 overrides=[ToolOverride(original_name="t", hidden=True, reason="r")]
             )
         }
-        slimmed_path = write_slim_output(config, plans, tmp_path / "out")
+        slimmed_path, _removed = write_slim_output(config, plans, tmp_path / "out")
         document = json.loads(slimmed_path.read_text())["mcpServers"]
         assert document["untouched"] == {"command": "node", "args": ["x.js"]}
         assert document["old-sse"] == {"type": "sse", "url": "https://x/sse"}
@@ -295,7 +295,7 @@ class TestUltratestRegressions:
         from whetkit.curation import CurationPlan, ToolOverride
 
         plans = {"s": CurationPlan(overrides=[ToolOverride(original_name="t", hidden=True)])}
-        slimmed = write_slim_output(config, plans, "~/tilde-out")
+        slimmed, _removed = write_slim_output(config, plans, "~/tilde-out")
         assert slimmed == tmp_path / "tilde-out" / "mcp.slimmed.json"
 
     def test_wrapper_command_is_absolute_when_resolvable(self, tmp_path: Path, monkeypatch) -> None:
@@ -310,7 +310,7 @@ class TestUltratestRegressions:
         from whetkit.curation import CurationPlan, ToolOverride
 
         plans = {"s": CurationPlan(overrides=[ToolOverride(original_name="t", hidden=True)])}
-        slimmed = write_slim_output(config, plans, tmp_path / "out")
+        slimmed, _removed = write_slim_output(config, plans, tmp_path / "out")
         entry = json.loads(slimmed.read_text())["mcpServers"]["s"]
         assert entry["command"] == str(fake)
 
@@ -359,3 +359,55 @@ class TestUltratestRegressions:
         assert "cannot act on 'dead'" in norm
         assert "nothing to apply" in norm
         assert "no --hide servers" not in norm  # the old lying message
+
+
+class TestDedupeV2:
+    def test_cluster_consolidates_on_single_winner(self) -> None:
+        # a<b<c description informativeness: one cluster, c wins, a+b hidden
+        inventories = {
+            "a": inventory(tool("search", "Search the files.")),
+            "b": inventory(tool("search", "Search the files quickly now.")),
+            "c": inventory(tool("search", "Search the files quickly with ranked results.")),
+        }
+        plans = build_dedupe_plans(inventories, cross_server_duplicates(inventories))
+        assert set(plans) == {"a", "b"}
+        for plan in plans.values():
+            (override,) = plan.overrides
+            assert "Duplicate of c.search" in override.reason
+
+    def test_tie_cluster_keeps_earliest_config_server(self) -> None:
+        inventories = {
+            name: inventory(tool("search", "Search the files."))
+            for name in ("first", "second", "third")
+        }
+        plans = build_dedupe_plans(inventories, cross_server_duplicates(inventories))
+        assert set(plans) == {"second", "third"}  # 'first' wins the tie
+        for plan in plans.values():
+            assert "Duplicate of first.search" in plan.overrides[0].reason
+
+    def test_fully_hidden_server_dropped_from_config(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    },
+                    "mini-b": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server_b.py")],
+                    },
+                }
+            },
+        )
+        out = tmp_path / "o"
+        result = runner.invoke(
+            app,
+            ["slim", "--config", str(path), "--hide", "mini-b", "--apply", "--out", str(out)],
+        )
+        assert result.exit_code == 0, result.output
+        assert "removed mini-b from the slimmed config" in plain(result.output)
+        document = json.loads((out / "mcp.slimmed.json").read_text())["mcpServers"]
+        assert "mini-b" not in document
+        assert "mini" in document  # untouched server copied verbatim
