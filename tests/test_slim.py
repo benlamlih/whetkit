@@ -546,3 +546,56 @@ class TestToolSearchAwareness:
         document = json.loads(path.read_text())["mcpServers"]
         assert document["a"] == {"command": "python", "alwaysLoad": True}
         assert document["b"] == {"command": "python"}  # demoted, defer field gone
+
+
+class TestShare:
+    def test_snippet_numbers_badge_and_escaping(self) -> None:
+        from whetkit.slim import share_markdown
+
+        snippet = share_markdown(
+            "/x/mcp.json",
+            [("files|weird", 14, 1902), ("memory", 9, 996)],
+            2898,
+            0.0087,
+            after_tokens=1902,
+            after_cost=0.0057,
+        )
+        assert "| files\\|weird | 14 | 1902 |" in snippet
+        assert "~2898 tokens" in snippet
+        assert "$8.70 per 1,000 messages" in snippet
+        assert "34% lighter" in snippet
+        assert "img.shields.io/badge/MCP_context-$8.70" in snippet
+
+    def test_share_flag_prints_snippet(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    }
+                }
+            },
+        )
+        result = runner.invoke(app, ["slim", "--config", str(path), "--share"])
+        assert result.exit_code == 0, result.output
+        assert "### My MCP tool-surface bill" in result.output
+        assert "img.shields.io" in result.output
+
+    def test_json_carries_share_markdown(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    }
+                }
+            },
+        )
+        result = runner.invoke(app, ["slim", "--config", str(path), "--json"])
+        assert result.exit_code == 0, result.output
+        document = json.loads(result.output[result.output.index("{") :])
+        assert "### My MCP tool-surface bill" in document["share_markdown"]
