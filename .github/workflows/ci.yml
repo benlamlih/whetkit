@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  lint-and-test:
+  tests:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -27,3 +27,11 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  # Branch protection requires a check with exactly this name; the matrix
+  # legs feed it so the required-check name survives matrix changes.
+  lint-and-test:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "all matrix legs green"
