@@ -1,6 +1,6 @@
 [project]
 name = "whetkit"
-version = "0.10.0"
+version = "0.10.1"
 description = "Measure and improve how well LLM agents select and use the tools exposed by an MCP server"
 readme = "README.md"
 license = "Apache-2.0"
