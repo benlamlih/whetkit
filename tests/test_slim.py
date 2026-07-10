@@ -236,7 +236,7 @@ class TestSlimCli:
             ["slim", "--config", str(self._two_server_config(tmp_path)), "--apply"],
         )
         assert result.exit_code != 0
-        assert "--dedupe and/or --hide" in result.output
+        assert "--dedupe and/or --hide" in plain(result.output)
 
     def test_missing_config_is_friendly(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["slim", "--config", str(tmp_path / "ghost.json")])
