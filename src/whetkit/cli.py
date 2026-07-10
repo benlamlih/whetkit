@@ -633,6 +633,23 @@ def slim(
         str,
         typer.Option("--hide", help="Comma-separated server names to hide entirely"),
     ] = "",
+    recommend_hot: Annotated[
+        bool,
+        typer.Option(
+            "--recommend-hot",
+            help=(
+                "Recommend which servers deserve alwaysLoad: true under Claude "
+                "Code's tool search (uses --from-traces when given)"
+            ),
+        ),
+    ] = False,
+    from_traces: Annotated[
+        str | None,
+        typer.Option(
+            "--from-traces",
+            help="whetkit trace store: servers whose tools real runs called count as hot",
+        ),
+    ] = None,
     json_out: Annotated[
         bool, typer.Option("--json", help="Emit the audit as JSON instead of text")
     ] = False,
@@ -645,6 +662,8 @@ def slim(
         build_dedupe_plans,
         cross_server_duplicates,
         parse_client_config,
+        recommend_hot_servers,
+        write_hot_config,
         write_slim_output,
     )
 
@@ -652,12 +671,22 @@ def slim(
         client_config = parse_client_config(config)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+    for named in client_config.defer_loading_entries:
+        typer.echo(
+            f"warning: {named!r} sets defer_loading — Claude Code parses and "
+            "silently ignores that field (anthropics/claude-code#26844); the "
+            "real mechanism is alwaysLoad + tool search",
+            err=True,
+        )
     keep_servers = {s.strip() for s in keep.split(",") if s.strip()}
     hide_servers = {s.strip() for s in hide.split(",") if s.strip()}
     for named in (keep_servers | hide_servers) - set(client_config.servers):
         typer.echo(f"warning: --keep/--hide names unknown server {named!r}", err=True)
-    if apply and not (dedupe or hide_servers):
-        raise typer.BadParameter("--apply needs --dedupe and/or --hide to have work to do")
+    if apply and not (dedupe or hide_servers or (recommend_hot and from_traces)):
+        raise typer.BadParameter(
+            "--apply needs --dedupe, --hide, and/or --recommend-hot --from-traces "
+            "to have work to do"
+        )
 
     async def _inventories() -> tuple[dict, dict[str, str]]:
         inventories: dict = {}
@@ -706,6 +735,37 @@ def slim(
     after_tokens = total_tokens - hidden_tokens
     after_cost = estimate_cost_usd(model_id, after_tokens, 0)
 
+    def cost_of(server_names) -> tuple[int, float | None]:
+        tokens = sum(
+            inventories[n].total_definition_tokens for n in server_names if n in inventories
+        )
+        return tokens, estimate_cost_usd(model_id, tokens, 0)
+
+    hot_recommendation: dict | None = None
+    if recommend_hot:
+        if from_traces:
+            try:
+                hot, cold, hot_warnings = recommend_hot_servers(inventories, from_traces)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            for warning in hot_warnings:
+                typer.echo(f"warning: {warning}", err=True)
+            hot_tokens, hot_cost = cost_of(hot)
+            hot_recommendation = {
+                "hot": sorted(hot),
+                "cold": sorted(cold),
+                "hot_definition_tokens": hot_tokens,
+                "hot_cost_per_message_usd": hot_cost,
+            }
+        else:
+            typer.echo(
+                "note: --recommend-hot without --from-traces has no usage signal — "
+                "the per-server table above IS the cost-if-always-loaded view. "
+                "Run your usual tasks with 'whetkit run --store traces.sqlite3' "
+                "and pass --from-traces for a real recommendation.",
+                err=True,
+            )
+
     if json_out:
         import json as jsonlib
 
@@ -727,6 +787,9 @@ def slim(
             "total_definition_tokens": total_tokens,
             "cost_per_message_usd": per_message,
             "cross_server_duplicates": [d.model_dump() for d in duplicates],
+            "always_load": client_config.always_load,
+            "defer_loading_ignored": client_config.defer_loading_entries,
+            "hot_recommendation": hot_recommendation,
             "plan_servers": sorted(plans),
             "after_definition_tokens": after_tokens if plans else None,
             "after_cost_per_message_usd": after_cost if plans else None,
@@ -756,6 +819,31 @@ def slim(
                 f"≈ ${per_message:.4f} of context per message on {model_id} "
                 f"(≈ ${per_message * 1000:.2f} per 1,000 messages)"
             )
+        if client_config.always_load:
+            hot_tokens, hot_cost = cost_of(client_config.always_load)
+            cost_s = f", ${hot_cost:.4f}/message" if hot_cost is not None else ""
+            typer.echo(
+                f"\nTool search hot set (alwaysLoad): "
+                f"{', '.join(client_config.always_load)} — ~{hot_tokens} tokens{cost_s}; "
+                "the rest loads on demand"
+            )
+        elif len(inventories) > 1:
+            typer.echo(
+                "\nTip: Claude Code's tool search (ENABLE_TOOL_SEARCH) defers tool "
+                "loading; mark only your hot servers with alwaysLoad: true — "
+                "try --recommend-hot --from-traces"
+            )
+        if hot_recommendation is not None:
+            rec_cost = hot_recommendation["hot_cost_per_message_usd"]
+            cost_s = f", ${rec_cost:.4f}/message" if rec_cost is not None else ""
+            typer.echo(
+                f"\nRecommended alwaysLoad set (from traces): "
+                f"{', '.join(hot_recommendation['hot']) or '(none)'} — "
+                f"~{hot_recommendation['hot_definition_tokens']} tokens{cost_s} "
+                f"(full surface: ~{total_tokens})"
+            )
+            if hot_recommendation["cold"]:
+                typer.echo(f"Defer (no observed usage): {', '.join(hot_recommendation['cold'])}")
         if duplicates:
             typer.echo(f"\nCross-server duplicates ({len(duplicates)}):")
             for duplicate in duplicates:
@@ -769,6 +857,10 @@ def slim(
                 f"{len(plans)} server(s) -> ~{after_tokens} tokens"
                 + (f", ${after_cost:.4f}/message" if after_cost is not None else "")
             )
+
+    if apply and hot_recommendation is not None:
+        hot_path = write_hot_config(client_config, set(hot_recommendation["hot"]), out)
+        typer.echo(f"\nwrote {hot_path} (alwaysLoad stamped on the recommended servers)")
 
     if apply and plans:
         slimmed, removed = write_slim_output(client_config, plans, out, inventories=inventories)
