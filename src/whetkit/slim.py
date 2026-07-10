@@ -49,6 +49,13 @@ class ClientConfig(BaseModel):
     """False when the source file holds more than mcpServers (a full
     ~/.claude.json with settings/projects): the slimmed output is then a
     fragment to merge, not a drop-in replacement for the original file."""
+    always_load: list[str] = []
+    """Servers whose entries carry ``alwaysLoad: true`` — under Claude Code's
+    tool search these stay in context; everything else loads on demand."""
+    defer_loading_entries: list[str] = []
+    """Servers whose entries carry ``defer_loading`` — a field Claude Code
+    parses and silently ignores (anthropics/claude-code#26844); the real
+    mechanism is ``alwaysLoad``. Worth a loud lint."""
 
 
 def _entry_to_spec(entry: dict) -> ServerSpec:
@@ -106,12 +113,24 @@ def parse_client_config(path: str | Path) -> ClientConfig:
         except (ValueError, KeyError) as exc:
             skipped.append(SkippedServer(name=name, reason=str(exc)))
     standalone = set(document) <= {"mcpServers"}
+    always_load = sorted(
+        name
+        for name, entry in merged.items()
+        if isinstance(entry, dict) and entry.get("alwaysLoad") is True
+    )
+    defer_loading_entries = sorted(
+        name
+        for name, entry in merged.items()
+        if isinstance(entry, dict) and "defer_loading" in entry
+    )
     return ClientConfig(
         path=str(path),
         servers=servers,
         skipped=skipped,
         raw_entries=merged,
         standalone=standalone,
+        always_load=always_load,
+        defer_loading_entries=defer_loading_entries,
     )
 
 
@@ -306,3 +325,70 @@ def write_slim_output(
     slimmed_path = out / "mcp.slimmed.json"
     slimmed_path.write_text(json.dumps({"mcpServers": slimmed}, indent=2) + "\n")
     return slimmed_path, removed
+
+
+def recommend_hot_servers(
+    inventories: dict[str, ServerInventory],
+    trace_store_path: str | Path,
+) -> tuple[set[str], set[str], list[str]]:
+    """From real usage traces: which servers deserve ``alwaysLoad: true``.
+
+    A server is hot when any of its tools was actually called. Attribution
+    is by spec label when it matches, otherwise by unique tool-name lookup
+    across inventories. Returns (hot, cold, warnings)."""
+    from whetkit.tracing import TraceStore
+
+    path = Path(trace_store_path).expanduser()
+    if not path.is_file():
+        raise ValueError(f"no trace store at {path}")
+
+    labels = {}
+    tool_owner: dict[str, set[str]] = {}
+    for name, inventory in inventories.items():
+        labels[inventory.server] = name
+        for tool in inventory.tools:
+            tool_owner.setdefault(tool.name, set()).add(name)
+
+    hot: set[str] = set()
+    warnings: list[str] = []
+    unmatched_tools: set[str] = set()
+    with TraceStore(path) as store:
+        for run in store.load_runs(None):
+            server = labels.get(run.server)
+            for tool in run.called_tool_names:
+                if server is not None:
+                    hot.add(server)
+                    continue
+                owners = tool_owner.get(tool, set())
+                if len(owners) == 1:
+                    hot.add(next(iter(owners)))
+                elif not owners:
+                    unmatched_tools.add(tool)
+    if unmatched_tools:
+        warnings.append(
+            "traces mention tools not in this config (ignored): "
+            + ", ".join(sorted(unmatched_tools)[:5])
+        )
+    cold = set(inventories) - hot
+    return hot, cold, warnings
+
+
+def write_hot_config(config: ClientConfig, hot: set[str], out_dir: str | Path) -> Path:
+    """``hot.mcp.json``: the user's entries with ``alwaysLoad: true`` stamped
+    on the recommended servers (and removed elsewhere) — ready for Claude
+    Code's tool search. Same merge semantics as the slimmed config."""
+    out = Path(out_dir).expanduser()
+    out.mkdir(parents=True, exist_ok=True)
+    stamped: dict[str, dict] = {}
+    for name, entry in config.raw_entries.items():
+        entry = dict(entry) if isinstance(entry, dict) else entry
+        if isinstance(entry, dict):
+            entry.pop("defer_loading", None)  # silently-ignored field, drop it
+            if name in hot:
+                entry["alwaysLoad"] = True
+            else:
+                entry.pop("alwaysLoad", None)
+        stamped[name] = entry
+    path = out / "hot.mcp.json"
+    path.write_text(json.dumps({"mcpServers": stamped}, indent=2) + "\n")
+    return path

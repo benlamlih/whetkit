@@ -236,7 +236,7 @@ class TestSlimCli:
             ["slim", "--config", str(self._two_server_config(tmp_path)), "--apply"],
         )
         assert result.exit_code != 0
-        assert "--dedupe and/or --hide" in plain(result.output)
+        assert "--apply needs" in plain(result.output)
 
     def test_missing_config_is_friendly(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["slim", "--config", str(tmp_path / "ghost.json")])
@@ -411,3 +411,138 @@ class TestDedupeV2:
         document = json.loads((out / "mcp.slimmed.json").read_text())["mcpServers"]
         assert "mini-b" not in document
         assert "mini" in document  # untouched server copied verbatim
+
+
+class TestToolSearchAwareness:
+    def test_defer_loading_lint_and_always_load_parsing(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "hot-srv": {"command": "python", "alwaysLoad": True},
+                    "trap-srv": {"command": "python", "defer_loading": True},
+                    "plain": {"command": "python"},
+                }
+            },
+        )
+        config = parse_client_config(path)
+        assert config.always_load == ["hot-srv"]
+        assert config.defer_loading_entries == ["trap-srv"]
+
+    def test_audit_reports_hot_set_and_lints_defer(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                        "alwaysLoad": True,
+                        "defer_loading": True,
+                    },
+                    "mini-b": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server_b.py")],
+                    },
+                }
+            },
+        )
+        result = runner.invoke(app, ["slim", "--config", str(path)])
+        assert result.exit_code == 0, result.output
+        norm = plain(result.output)
+        assert "silently ignores" in norm and "#26844" in norm
+        assert "Tool search hot set (alwaysLoad): mini" in norm
+
+    def test_recommend_hot_from_traces(self, tmp_path: Path) -> None:
+        from whetkit.tracing import TaskRun, ToolCallRecord, TraceStore, TurnRecord
+
+        store_path = tmp_path / "traces.sqlite3"
+        run = TaskRun(
+            task_id="t",
+            server="unmatched-label",
+            model="m",
+            turns=[
+                TurnRecord(
+                    index=0,
+                    tool_calls=[
+                        # 'add' exists only on mini -> tool-name attribution
+                        ToolCallRecord(call_id="c", name="add", result_text="ok")
+                    ],
+                )
+            ],
+        )
+        with TraceStore(store_path) as store:
+            store.save_runs([run], run_group="baseline")
+
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    },
+                    "mini-b": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server_b.py")],
+                    },
+                }
+            },
+        )
+        out = tmp_path / "o"
+        result = runner.invoke(
+            app,
+            [
+                "slim",
+                "--config",
+                str(path),
+                "--recommend-hot",
+                "--from-traces",
+                str(store_path),
+                "--apply",
+                "--out",
+                str(out),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        norm = plain(result.output)
+        assert "Recommended alwaysLoad set (from traces): mini" in norm
+        assert "Defer (no observed usage): mini-b" in norm
+        document = json.loads((out / "hot.mcp.json").read_text())["mcpServers"]
+        assert document["mini"]["alwaysLoad"] is True
+        assert "alwaysLoad" not in document["mini-b"]
+
+    def test_recommend_hot_without_traces_points_at_them(self, tmp_path: Path) -> None:
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    }
+                }
+            },
+        )
+        result = runner.invoke(app, ["slim", "--config", str(path), "--recommend-hot"])
+        assert result.exit_code == 0, result.output
+        assert "--from-traces" in plain(result.output)
+
+    def test_hot_config_drops_ignored_defer_field(self, tmp_path: Path) -> None:
+        from whetkit.slim import write_hot_config
+
+        config = parse_client_config(
+            write_config(
+                tmp_path,
+                {
+                    "mcpServers": {
+                        "a": {"command": "python", "defer_loading": True},
+                        "b": {"command": "python", "alwaysLoad": True},
+                    }
+                },
+            )
+        )
+        path = write_hot_config(config, {"a"}, tmp_path / "o")
+        document = json.loads(path.read_text())["mcpServers"]
+        assert document["a"] == {"command": "python", "alwaysLoad": True}
+        assert document["b"] == {"command": "python"}  # demoted, defer field gone
