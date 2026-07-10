@@ -669,3 +669,53 @@ class TestPluginVisibility:
 
         off = runner.invoke(app, ["slim", "--config", str(path), "--no-plugins"])
         assert "plugged" not in off.output
+
+    def test_discovery_reads_bare_map_shape(self, tmp_path: Path) -> None:
+        # official-marketplace plugins ship {"name": {command,...}} with no
+        # mcpServers wrapper (found by installing the real playwright plugin)
+        from whetkit.slim import discover_plugin_servers
+
+        plugins = tmp_path / "plugins"
+        install = plugins / "cache" / "off" / "playwright" / "unknown"
+        install.mkdir(parents=True)
+        (install / ".mcp.json").write_text(
+            json.dumps({"playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]}})
+        )
+        (plugins / "installed_plugins.json").write_text(
+            json.dumps(
+                {"version": 2, "plugins": {"playwright@off": [{"installPath": str(install)}]}}
+            )
+        )
+        servers, warnings = discover_plugin_servers(plugins)
+        assert list(servers) == ["playwright (plugin: playwright)"]
+        assert warnings == []
+
+
+class TestPluginsOnlyConfig:
+    def test_plugins_only_config_audits_the_plugin_surface(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        plugins = TestPluginVisibility()._plugins_dir(tmp_path)
+        monkeypatch.setenv("CLAUDE_PLUGINS_DIR", str(plugins))
+        # a real ~/.claude.json shape: settings, projects, no mcpServers
+        path = tmp_path / "claude.json"
+        path.write_text(json.dumps({"someSetting": True, "projects": {}}))
+        result = runner.invoke(app, ["slim", "--config", str(path)])
+        assert result.exit_code == 0, result.output
+        norm = plain(result.output)
+        assert "auditing the plugin-provided surface only" in norm
+        assert "plugged (plugin: myplugin)" in norm
+
+    def test_truly_empty_still_errors(self, tmp_path: Path) -> None:
+        path = tmp_path / "claude.json"
+        path.write_text(json.dumps({"someSetting": True}))
+        result = runner.invoke(app, ["slim", "--config", str(path)])
+        assert result.exit_code != 0
+        assert "no installed plugin ships MCP servers" in plain(result.output)
+
+    def test_no_plugins_flag_keeps_old_refusal(self, tmp_path: Path) -> None:
+        path = tmp_path / "claude.json"
+        path.write_text(json.dumps({"someSetting": True}))
+        result = runner.invoke(app, ["slim", "--config", str(path), "--no-plugins"])
+        assert result.exit_code != 0
+        assert "nothing to audit" in plain(result.output)
