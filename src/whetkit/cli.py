@@ -771,8 +771,13 @@ def slim(
             )
 
     if apply and plans:
-        slimmed = write_slim_output(client_config, plans, out)
+        slimmed, removed = write_slim_output(client_config, plans, out, inventories=inventories)
         typer.echo(f"\nwrote {slimmed}")
+        for name in removed:
+            typer.echo(
+                f"removed {name} from the slimmed config (all tools hidden) — "
+                "restore by re-adding its original entry"
+            )
         if client_config.standalone:
             typer.echo(
                 "Point your client at the slimmed config to use it; your original "
