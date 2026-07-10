@@ -51,6 +51,23 @@ uv tool install whetkit   # or: uvx whetkit / pipx install whetkit
 (Released to PyPI from tags — see [RELEASING.md](RELEASING.md). PyPI can lag
 behind main; the quickstart below runs from source.)
 
+## Two-minute start (no API key)
+
+Weigh the tool surface your MCP client actually loads — including servers
+shipped by Claude Code plugins, which no other audit tool can see:
+
+```sh
+uv tool install whetkit
+whetkit slim --config ~/.claude.json --share
+```
+
+You get tokens + $ per server, cross-server duplicate findings, and a
+copy-pasteable snippet. Dollar figures are uncached API ceilings — prompt
+caching and Claude Code's tool search reduce the marginal cost; on
+subscription plans the real cost is context-window share. Then
+`--recommend-hot --from-traces` tells you which servers deserve
+`alwaysLoad: true` under tool search, from your real usage.
+
 ## Quickstart (5 minutes)
 
 Requires [uv](https://docs.astral.sh/uv/) and an Anthropic API key (or
