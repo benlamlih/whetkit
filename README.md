@@ -136,7 +136,7 @@ back to the original world.
 
 | Command | What it does |
 |---|---|
-| `whetkit slim` | Audit the union tool surface of your MCP **client config** (Claude Code / Cursor / Claude Desktop): tokens + $ per message, cross-server duplicates; `--dedupe --apply` writes reversible per-server overlay plans and a slimmed config. |
+| `whetkit slim` | The scale + the proof for your MCP **client config**: tokens + $ per message with zero adoption, cross-server dedupe, tool-search-aware `--recommend-hot --from-traces` (alwaysLoad set from real usage), `--share` snippet, reversible `--apply`. Pair with [prove-your-gateway](docs/prove-your-gateway.md). |
 | `whetkit doctor` | Lint the tool surface: vague descriptions, cryptic names, near-duplicates, context bloat. `--json`; `--fail-on warn` for CI. |
 | `whetkit inspect` | Tool inventory: names, params, description tokens, schema complexity. |
 | `whetkit generate` | Draft eval tasks from the inventory (server-context aware, read-only unless `--allow-writes`); review-before-trust YAML. |
@@ -167,7 +167,8 @@ so a bad score always says why.
   metric is the hit-rate across tasks.
 
 More docs: [docs/task-format.md](docs/task-format.md) ·
-[docs/curation.md](docs/curation.md) · [VERSIONS.md](VERSIONS.md) ·
+[docs/curation.md](docs/curation.md) ·
+[docs/prove-your-gateway.md](docs/prove-your-gateway.md) · [VERSIONS.md](VERSIONS.md) ·
 [MIGRATION.md](MIGRATION.md)
 
 ## Development
