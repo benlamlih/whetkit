@@ -71,9 +71,21 @@ server and it sees the curated tool set.
 ## Slimming a whole client config
 
 `whetkit slim --config ~/.claude.json` audits every server your MCP client
-loads and prices the union tool surface that rides along with every message.
-`--dedupe --apply` writes per-server hide plans plus `mcp.slimmed.json`,
-where slimmed servers are served through `whetkit overlay`. Your original
-config is never modified — reverting is pointing the client back at it (or
-deleting the slim-out directory). The same reversibility guarantee as any
-other plan: metadata only, origin servers untouched.
+loads — including servers shipped by installed Claude Code **plugins**,
+which live outside your config (`--no-plugins` to exclude; they are
+measured, never modified) — and prices the union tool surface that rides
+along with every message. Dollar figures are uncached API ceilings; prompt
+caching and Claude Code's tool search reduce the marginal cost.
+
+`--dedupe` consolidates cross-server duplicate tools onto one visible
+winner per cluster; `--hide server` drops a whole server; `--apply` writes
+per-server hide plans plus `mcp.slimmed.json`, where slimmed servers are
+served through `whetkit overlay` (fully-hidden servers are dropped from
+the config outright). `--recommend-hot --from-traces traces.sqlite3`
+derives which servers deserve `alwaysLoad: true` under Claude Code's tool
+search from your real usage, and `--apply` then also writes `hot.mcp.json`.
+`--share` prints a copy-pasteable markdown snippet of the audit.
+
+Your original config is never modified — reverting is pointing the client
+back at it (or deleting the slim-out directory). The same reversibility
+guarantee as any other plan: metadata only, origin servers untouched.

@@ -51,6 +51,10 @@ uv tool install whetkit   # or: uvx whetkit / pipx install whetkit
 (Released to PyPI from tags — see [RELEASING.md](RELEASING.md). PyPI can lag
 behind main; the quickstart below runs from source.)
 
+Pure Python, no platform-specific code: **Linux and macOS are supported and
+CI-tested on both**. Windows is untested — the eval loop spawns stdio
+subprocesses and `--reset-cmd` assumes a POSIX shell; reports welcome.
+
 ## Two-minute start (no API key)
 
 Weigh the tool surface your MCP client actually loads — including servers
