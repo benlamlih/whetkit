@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>whetkit — see what your MCP setup costs, cut it, prove it</title>
-<meta name="description" content="Free CLI: audit the token bill of your MCP client config (including plugin servers nobody else can see), fix tool surfaces with measurable before/after, and prove any reduction didn't break your workflows.">
-
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -19,10 +21,7 @@
   @keyframes blink { 0%,49%{opacity:1;} 50%,100%{opacity:0;} }
   @keyframes floatArrow { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(4px);} }
 </style>
-
-</head>
-<body>
-
+</helmet>
 
 <div style="max-width: 1180px; margin: 0 auto; padding: 0 32px;">
 
@@ -269,6 +268,112 @@
     </div>
   </div>
 </footer>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { installLabel: "copy", shareLabel: "copy", heroP: 0, fixP: 0 };
+  heroRef = React.createRef();
+  fixRef = React.createRef();
 
+  tween(dur, cb) {
+    const start = performance.now();
+    const step = (now) => {
+      const p = Math.min(1, (now - start) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      cb(e);
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  fire(region) {
+    this._d = this._d || {};
+    if (this._d[region]) return;
+    this._d[region] = true;
+    if (region === "hero") this.tween(1300, (e) => this.setState({ heroP: e }));
+    else this.tween(1300, (e) => this.setState({ fixP: e }));
+  }
+
+  copy(text, key) {
+    try { navigator.clipboard.writeText(text); } catch (e) {}
+    this.setState({ [key]: "copied ✓" });
+    clearTimeout(this["_t_" + key]);
+    this["_t_" + key] = setTimeout(() => this.setState({ [key]: "copy" }), 1600);
+  }
+
+  renderVals() {
+    const { heroP, fixP } = this.state;
+    const install = "uv tool install whetkit && whetkit slim --config ~/.claude.json";
+    return {
+      installLabel: this.state.installLabel,
+      shareLabel: this.state.shareLabel,
+      copyInstall: () => this.copy(install, "installLabel"),
+      copyShare: () => this.copy(install + " --share", "shareLabel"),
+
+      heroRef: this.heroRef,
+      fixRef: this.fixRef,
+
+      billTokens: Math.round(heroP * 8624).toLocaleString(),
+      billDollars: (heroP * 25.87).toFixed(2),
+      fixBefore: Math.round(fixP * 80),
+      fixAfter: Math.round(fixP * 100),
+      fixAfterW: (fixP * 100) + "%",
+
+      servers: [
+        { name: "firebase", tools: "19", tokens: "3,633", cost: "$0.0109" },
+        { name: "playwright", tools: "24", tokens: "3,870", cost: "$0.0116" },
+        { name: "context7", tools: "2", tokens: "1,121", cost: "$0.0034" },
+      ],
+
+      positions: [
+        {
+          name: "Claude Code tool search",
+          great: "Great at reduction — ~85% built in.",
+          adds: "the alwaysLoad recommendation from your real traces, and a lint for the silently-ignored defer_loading field.",
+        },
+        {
+          name: "Gateways & toolsets",
+          great: "hypertool, mcp-filter, Meta-MCP — great at dynamic loading.",
+          adds: "the A/B proof that they didn't quietly degrade your agent while the task still passed.",
+        },
+        {
+          name: "Static graders",
+          great: "Schema letter grades for a tool's shape.",
+          adds: "live agents that actually run the tools, attribute every failure to the tool that caused it, then ship the fix.",
+        },
+      ],
+
+      commands: [
+        { cmd: "slim", desc: "audit config $ — tokens, dollars, duplicates, plugins" },
+        { cmd: "doctor", desc: "lint one server in 10s, no key" },
+        { cmd: "inspect", desc: "see exactly what the agent sees" },
+        { cmd: "generate", desc: "draft eval tasks from a server" },
+        { cmd: "run", desc: "live evals — --runs mean±range + flaky detection" },
+        { cmd: "curate", desc: "propose-and-prove metadata overlay" },
+        { cmd: "fix", desc: "self-correcting curation" },
+        { cmd: "plan-init", desc: "scaffold view plans" },
+        { cmd: "diff", desc: "before / after verdict on your tasks" },
+        { cmd: "export", desc: "share fixes upstream" },
+        { cmd: "overlay", desc: "serve any curated view, reversibly" },
+      ],
+    };
+  }
+
+  componentDidMount() {
+    setTimeout(() => this.fire("hero"), 350);
+    const onScroll = () => {
+      const el = this.fixRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.top < window.innerHeight * 0.82 && r.bottom > 0) {
+        this.fire("fix");
+        window.removeEventListener("scroll", onScroll);
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    setTimeout(onScroll, 400);
+  }
+}
+</script>
 </body>
 </html>
