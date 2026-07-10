@@ -660,6 +660,16 @@ def slim(
     json_out: Annotated[
         bool, typer.Option("--json", help="Emit the audit as JSON instead of text")
     ] = False,
+    plugins: Annotated[
+        bool,
+        typer.Option(
+            "--plugins/--no-plugins",
+            help=(
+                "Also audit MCP servers shipped by installed Claude Code plugins "
+                "(~/.claude/plugins) — measured but never modified"
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Audit — and optionally shrink — the union tool surface your MCP client
     sends with every message. The audit needs no tasks and no API key."""
@@ -668,6 +678,7 @@ def slim(
     from whetkit.slim import (
         build_dedupe_plans,
         cross_server_duplicates,
+        discover_plugin_servers,
         parse_client_config,
         recommend_hot_servers,
         share_markdown,
@@ -696,10 +707,20 @@ def slim(
             "to have work to do"
         )
 
+    plugin_names: set[str] = set()
+    all_servers = dict(client_config.servers)
+    if plugins:
+        plugins_dir = os.environ.get("CLAUDE_PLUGINS_DIR") or (Path.home() / ".claude" / "plugins")
+        plugin_servers, plugin_warnings = discover_plugin_servers(plugins_dir)
+        for warning in plugin_warnings:
+            typer.echo(f"warning: {warning}", err=True)
+        plugin_names = set(plugin_servers)
+        all_servers.update(plugin_servers)
+
     async def _inventories() -> tuple[dict, dict[str, str]]:
         inventories: dict = {}
         failures: dict[str, str] = {}
-        for name, spec in client_config.servers.items():
+        for name, spec in all_servers.items():
             typer.echo(f"inspecting {name} ...", err=True)
             try:
                 inventories[name] = await inspect_server(spec)
@@ -724,12 +745,18 @@ def slim(
     total_tokens = sum(inv.total_definition_tokens for inv in inventories.values())
     per_message = estimate_cost_usd(model_id, total_tokens, 0)
 
+    for named in sorted(hide_servers & plugin_names):
+        typer.echo(
+            f"warning: {named!r} is plugin-provided — whetkit measures it but "
+            "cannot hide it; disable the plugin instead",
+            err=True,
+        )
     plans = (
         build_dedupe_plans(
             inventories,
             duplicates if dedupe else [],
-            hide_servers=hide_servers,
-            keep_servers=keep_servers,
+            hide_servers=hide_servers - plugin_names,
+            keep_servers=keep_servers | plugin_names,
         )
         if (dedupe or hide_servers)
         else {}
@@ -804,6 +831,7 @@ def slim(
             "total_definition_tokens": total_tokens,
             "cost_per_message_usd": per_message,
             "cross_server_duplicates": [d.model_dump() for d in duplicates],
+            "plugin_servers": sorted(plugin_names),
             "always_load": client_config.always_load,
             "defer_loading_ignored": client_config.defer_loading_entries,
             "hot_recommendation": hot_recommendation,

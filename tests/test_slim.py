@@ -20,6 +20,12 @@ runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_plugins(monkeypatch, tmp_path_factory):
+    """Keep the developer's real ~/.claude/plugins out of every slim test."""
+    monkeypatch.setenv("CLAUDE_PLUGINS_DIR", str(tmp_path_factory.mktemp("no-plugins")))
+
+
 def write_config(tmp_path: Path, document: dict) -> Path:
     path = tmp_path / "mcp.json"
     path.write_text(json.dumps(document))
@@ -599,3 +605,67 @@ class TestShare:
         assert result.exit_code == 0, result.output
         document = json.loads(result.output[result.output.index("{") :])
         assert "### My MCP tool-surface bill" in document["share_markdown"]
+
+
+class TestPluginVisibility:
+    def _plugins_dir(self, tmp_path: Path) -> Path:
+        plugins = tmp_path / "plugins"
+        install = plugins / "cache" / "mkt" / "myplugin" / "1.0.0"
+        install.mkdir(parents=True)
+        (install / ".mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "plugged": {
+                            "command": sys.executable,
+                            "args": [str(FIXTURES / "mini_server_b.py")],
+                        }
+                    }
+                }
+            )
+        )
+        (plugins / "installed_plugins.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "plugins": {"myplugin@mkt": [{"installPath": str(install)}]},
+                }
+            )
+        )
+        return plugins
+
+    def test_discovery_parses_live_layout(self, tmp_path: Path) -> None:
+        from whetkit.slim import discover_plugin_servers
+
+        servers, warnings = discover_plugin_servers(self._plugins_dir(tmp_path))
+        assert list(servers) == ["plugged (plugin: myplugin)"]
+        assert warnings == []
+        # absence degrades silently
+        assert discover_plugin_servers(tmp_path / "nope") == ({}, [])
+
+    def test_audit_includes_plugins_flagged_and_unhideable(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_PLUGINS_DIR", str(self._plugins_dir(tmp_path)))
+        path = write_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mini": {
+                        "command": sys.executable,
+                        "args": [str(FIXTURES / "mini_server.py")],
+                    }
+                }
+            },
+        )
+        result = runner.invoke(
+            app,
+            ["slim", "--config", str(path), "--hide", "plugged (plugin: myplugin)"],
+        )
+        assert result.exit_code == 0, result.output
+        norm = plain(result.output)
+        assert "plugged (plugin: myplugin)" in norm
+        assert "cannot hide it; disable the plugin instead" in norm
+
+        off = runner.invoke(app, ["slim", "--config", str(path), "--no-plugins"])
+        assert "plugged" not in off.output
