@@ -182,7 +182,7 @@ class TestRenderHtml:
         assert "improved on 1 task" in html_text
         assert "renamed the cryptic search tool" in html_text
         assert "BEFORE · raw tool set" in html_text
-        assert "<details open" in html_text  # first improved task starts expanded
+        assert '<details class="row" open' in html_text  # first improved task starts expanded
 
     def test_escapes_untrusted_text(self) -> None:
         report, _ = build_fixture_report()
@@ -191,12 +191,48 @@ class TestRenderHtml:
         assert "<script>alert" not in html_text
         assert "&lt;script&gt;" in html_text
 
-    def test_spread_strings_render_next_to_headline(self) -> None:
-        report, _ = build_fixture_report()
-        assert "mean across runs" not in render_html(report)  # absent for single runs
+    def test_multi_run_headline_ranges_and_caveat(self) -> None:
+        tasks = [task("flips", ["data_query_1"])]
+        hit_run = run_for("flips", ["data_query_1"])
+        miss_run = run_for("flips", ["sys_ping"])
+        hit = summary_for(tasks, [hit_run])
+        miss = summary_for(tasks, [miss_run])
 
-        report.before_spread = "50% [0%–100%]"
-        report.after_spread = "100%"
+        report = build_report(
+            tasks,
+            [miss_run],
+            miss,
+            [hit_run],
+            hit,
+            PLAN,
+            baseline_summaries=[miss, hit],  # 50% mean [0–100%]
+            curated_summaries=[hit, hit],  # 100%, ranges overlap with before
+            est_cost_usd=0.42,
+        )
         html_text = render_html(report)
-        assert html_text.count("mean across runs") == 2
-        assert "50% [0%–100%]" in html_text
+        assert "Runs: 2 × 1 tasks" in html_text
+        assert "[0–100%]" in html_text
+        assert "ranges overlap" in html_text  # the noise caveat
+        assert "EST. COST" in html_text and "$0.42" in html_text
+        # per-task repetition cells
+        assert "⚡ 1/2" in html_text
+        assert "✓ 2/2" in html_text
+
+    def test_warnings_strip_only_when_nonzero(self) -> None:
+        report, _ = build_fixture_report()
+        assert "runs errored" not in render_html(report)
+        report.warnings = ["⚠ 1/4 runs timed out — raise --task-timeout"]
+        html_text = render_html(report)
+        assert "runs timed out" in html_text
+
+    def test_judge_and_spec_gap_render(self) -> None:
+        report, _ = build_fixture_report()
+        flips = next(t for t in report.tasks if t.task_id == "flips")
+        flips.after.judge_passed = True
+        flips.after.judge_rationale = "order cancelled correctly"
+        flips.after.spec_gap = True
+        html_text = render_html(report)
+        assert "judge ›" in html_text
+        assert "order cancelled correctly" in html_text
+        assert "⚠ spec-gap" in html_text
+        assert "expected_tools may be incomplete" in html_text

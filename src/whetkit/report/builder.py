@@ -24,6 +24,10 @@ class SideView(BaseModel):
 
     hit: bool
     tool_hit: bool
+    runs: int = 1
+    hits: int = 0
+    """How many repetitions hit (fills the design's '✓ 3/3' / '⚡ 2/3' cells)."""
+    spec_gap: bool = False
     judge_passed: bool | None = None
     judge_rationale: str | None = None
     tools_called: list[str] = []
@@ -48,6 +52,8 @@ class SideView(BaseModel):
         return cls(
             hit=score.hit,
             tool_hit=score.tool_hit,
+            hits=1 if score.hit else 0,
+            spec_gap=score.spec_gap,
             judge_passed=score.judge.passed if score.judge else None,
             judge_rationale=score.judge.rationale if score.judge else None,
             tools_called=score.tool_match.called,
@@ -74,6 +80,15 @@ class TaskComparison(BaseModel):
         if self.before.hit and not self.after.hit:
             return "regressed"
         return "unchanged"
+
+    @staticmethod
+    def side_state(side: SideView) -> str:
+        """'pass' / 'miss' / 'flaky' for one side across its repetitions."""
+        if side.hits == side.runs:
+            return "pass"
+        if side.hits == 0:
+            return "miss"
+        return "flaky"
 
 
 class ActionImpact(BaseModel):
@@ -126,6 +141,13 @@ class ComparisonReport(BaseModel):
     # the headline Totals hold the last repetition; these carry mean and range.
     before_spread: str | None = None
     after_spread: str | None = None
+    runs_per_side: int = 1
+    before_stats: dict = {}
+    after_stats: dict = {}
+    """{mean, low, high} hit-rates in 0..1 when repetitions exist."""
+    noise_caveat: str | None = None
+    warnings: list[str] = []
+    est_cost_usd: float | None = None
     tasks: list[TaskComparison]
     plan: CurationPlan
     action_impacts: list[ActionImpact]
@@ -199,7 +221,12 @@ def build_report(
     tools_after: int | None = None,
     before_spread: str | None = None,
     after_spread: str | None = None,
+    baseline_summaries: list[EvalSummary] | None = None,
+    curated_summaries: list[EvalSummary] | None = None,
+    est_cost_usd: float | None = None,
 ) -> ComparisonReport:
+    baseline_summaries = baseline_summaries or [baseline_summary]
+    curated_summaries = curated_summaries or [curated_summary]
     baseline_runs_by_id = {r.task_id: r for r in baseline_runs}
     curated_runs_by_id = {r.task_id: r for r in curated_runs}
     baseline_scores = {s.task_id: s for s in baseline_summary.scores}
@@ -211,14 +238,63 @@ def build_report(
         after_score = curated_scores.get(task.id)
         if before_score is None or after_score is None:
             continue
+
+        def per_run(summaries: list[EvalSummary], task_id: str = task.id) -> tuple[int, int]:
+            hits = 0
+            for summary in summaries:
+                for score in summary.scores:
+                    if score.task_id == task_id and score.hit:
+                        hits += 1
+            return hits, len(summaries)
+
+        before_view = SideView.from_score(before_score, baseline_runs_by_id.get(task.id))
+        after_view = SideView.from_score(after_score, curated_runs_by_id.get(task.id))
+        before_view.hits, before_view.runs = per_run(baseline_summaries)
+        after_view.hits, after_view.runs = per_run(curated_summaries)
         comparisons.append(
             TaskComparison(
                 task_id=task.id,
                 prompt=task.prompt.strip(),
                 expected_slots=task.expected_tool_slots,
-                before=SideView.from_score(before_score, baseline_runs_by_id.get(task.id)),
-                after=SideView.from_score(after_score, curated_runs_by_id.get(task.id)),
+                before=before_view,
+                after=after_view,
             )
+        )
+
+    from whetkit.scoring import MultiRunSummary
+    from whetkit.scoring.aggregate import hit_rate_noise_caveat
+
+    before_multi = MultiRunSummary(summaries=baseline_summaries)
+    after_multi = MultiRunSummary(summaries=curated_summaries)
+
+    def stats(summaries: list[EvalSummary]) -> dict:
+        rates = [s.hit_rate for s in summaries]
+        return {"mean": sum(rates) / len(rates), "low": min(rates), "high": max(rates)}
+
+    total_task_runs = len(tasks) * (len(baseline_summaries) + len(curated_summaries))
+    counts = {
+        "errored": sum(s.error_run_count for s in baseline_summaries + curated_summaries),
+        "timeout": sum(s.timeout_run_count for s in baseline_summaries + curated_summaries),
+        "tool_errors": sum(s.total_tool_errors for s in baseline_summaries + curated_summaries),
+        "truncated": sum(s.truncated_run_count for s in baseline_summaries + curated_summaries),
+    }
+    warnings: list[str] = []
+    if counts["errored"]:
+        warnings.append(
+            f"⚠ {counts['errored']}/{total_task_runs} runs errored — infrastructure "
+            "failure, not tool selection"
+        )
+    if counts["timeout"]:
+        warnings.append(
+            f"⚠ {counts['timeout']}/{total_task_runs} runs timed out — raise --task-timeout"
+        )
+    if counts["tool_errors"]:
+        warnings.append(
+            f"⚠ {counts['tool_errors']} failed tool calls — agents received errors from the server"
+        )
+    if counts["truncated"]:
+        warnings.append(
+            f"⚠ {counts['truncated']}/{total_task_runs} truncated answers — raise --max-tokens"
         )
 
     return ComparisonReport(
@@ -230,6 +306,12 @@ def build_report(
         after=Totals.from_summary(curated_summary, curated_runs),
         before_spread=before_spread,
         after_spread=after_spread,
+        runs_per_side=len(baseline_summaries),
+        before_stats=stats(baseline_summaries),
+        after_stats=stats(curated_summaries),
+        noise_caveat=hit_rate_noise_caveat(before_multi, after_multi),
+        warnings=warnings,
+        est_cost_usd=est_cost_usd,
         tasks=comparisons,
         plan=plan,
         action_impacts=_attribute_actions(plan, comparisons, tasks),

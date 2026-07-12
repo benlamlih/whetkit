@@ -313,6 +313,18 @@ def _warn_plan_hides_required_tools(plan, task_list: list) -> None:
             )
 
 
+def _est_cost(model: str, task_runs: list) -> float | None:
+    """Estimated $ of these runs (None when the model isn't in the table)."""
+    from whetkit.llm import parse_model
+    from whetkit.llm.pricing import estimate_cost_usd
+
+    return estimate_cost_usd(
+        parse_model(model)[1],
+        sum(r.total_usage.input_tokens for r in task_runs),
+        sum(r.total_usage.output_tokens for r in task_runs),
+    )
+
+
 def _usage_cost_line(model: str, task_runs: list) -> str:
     """Token totals, wall-clock latency, and the estimated $ cost of the runs."""
     from whetkit.llm import parse_model
@@ -1516,6 +1528,7 @@ def curate(
         curated_runs, curated = curated_all[-1], curated_summaries[-1]
 
         origin_names = {t.name for t in inventory.tools}
+        all_task_runs = [r for rep in baseline_all + curated_all for r in rep]
         report = build_report(
             task_list,
             baseline_runs,
@@ -1529,6 +1542,9 @@ def curate(
             tools_after=len(plan.presented_to_original(origin_names)),
             before_spread=baseline_multi.hit_rate_spread() if runs > 1 else None,
             after_spread=curated_multi.hit_rate_spread() if runs > 1 else None,
+            baseline_summaries=baseline_summaries,
+            curated_summaries=curated_summaries,
+            est_cost_usd=_est_cost(model, all_task_runs),
         )
         html_path, json_path = _write_report(report, report_dir)
 
@@ -1561,7 +1577,6 @@ def curate(
             f"Tools: {report.tools_before} -> {report.tools_after}   "
             f"Tokens/task: {tok_before} -> {tok_after}"
         )
-        all_task_runs = [r for rep in baseline_all + curated_all for r in rep]
         typer.echo(_usage_cost_line(model, all_task_runs))
         typer.echo(
             f"Traces saved to {store_path} (groups {_group_family_note('baseline', runs)}, "
