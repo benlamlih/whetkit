@@ -34,7 +34,7 @@ dependencies = [
     "openai==2.45.0",
     "pydantic==2.13.4",
     "pyyaml==6.0.3",
-    "typer==0.26.8",
+    "typer==0.27.0",
     "httpx==0.28.1",
 ]
 
